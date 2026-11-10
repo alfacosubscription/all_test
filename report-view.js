@@ -26,6 +26,49 @@
     const ly = allocate(prior);
     return cy.map((value, index) => ({ label: `${index + 1} Oct`, current: value, prior: ly[index] }));
   }
+  function illustrativeTraffic(sales, name) {
+    if (typeof sales !== "number" || !Number.isFinite(sales)) throw new Error("Dummy traffic requires finite sales.");
+    const seed = [...name].reduce((total, character) => total + character.charCodeAt(0), 0);
+    const transactions = sales > 0 ? Math.max(1, Math.round(sales / (65 + seed % 86))) : 0;
+    return { transactions, check: transactions > 0 ? sales / transactions : null };
+  }
+  const menuTemplates = [
+    { name: "Signature Main", category: "Mains", price: 38, unitCost: 24, weight: 25 },
+    { name: "Classic Main", category: "Mains", price: 32, unitCost: 23, weight: 20 },
+    { name: "Signature Meal", category: "Meals", price: 49, unitCost: 31, weight: 18 },
+    { name: "Sharing Meal", category: "Meals", price: 89, unitCost: 72, weight: 12 },
+    { name: "Signature Side", category: "Sides", price: 14, unitCost: 8, weight: 9 },
+    { name: "Extra Side", category: "Sides", price: 10, unitCost: 6, weight: 5 },
+    { name: "Cold Beverage", category: "Beverages", price: 9, unitCost: 3, weight: 7 },
+    { name: "Signature Dessert", category: "Desserts", price: 18, unitCost: 11, weight: 4 },
+  ];
+  function illustrativeMenu(stores) {
+    const items = [];
+    for (const brand of [...new Set(stores.map((row) => row.brand))].sort()) {
+      const matches = stores.filter((row) => row.brand === brand);
+      if (!matches.some((row) => row.cy > 0 || row.ly > 0)) continue;
+      const allocate = (key) => {
+        const cents = Math.round(matches.reduce((total, row) => total + Math.max(0, row[key]), 0) * 100);
+        let weight = 0;
+        let allocated = 0;
+        return menuTemplates.map((item) => {
+          weight += item.weight;
+          const next = Math.round(cents * weight / 100);
+          const sales = (next - allocated) / 100;
+          allocated = next;
+          return sales;
+        });
+      };
+      const cy = allocate("cy");
+      const ly = allocate("ly");
+      menuTemplates.forEach((item, index) => {
+        const units = cy[index] > 0 ? Math.max(1, Math.round(cy[index] / item.price)) : 0;
+        const cost = units * item.unitCost;
+        items.push({ ...item, brand, cy: cy[index], ly: ly[index], units, cost, profit: cy[index] - cost });
+      });
+    }
+    return items;
+  }
   function create(data, state) {
     const $ = (id) => document.getElementById(id);
     const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) =>
@@ -107,10 +150,10 @@
     const penetrationHeaders = ["Brand / store", "Total revenue", "Reported delivery", "Reported delivery %", "Dine-in & takeaway", "Non-delivery %"];
     const penetrationRecord = (name, amount) => [name, money(amount.cy), money(amount.delivery), share(amount.delivery, amount.cy), money(amount.nonDelivery), share(amount.nonDelivery, amount.cy)];
     const group = (rs, key) => [...new Set(rs.map((row) => row[key]))].sort().map((name) => ({ name, ...totals(rs.filter((row) => row[key] === name)) }));
-    $("overview").innerHTML = `<div class="notice">Imported report data · 27 Oct 2026. Transactions, average check, menu costs and branch GPS are not supplied by the mapped comparison sheets. Reported totals use no sample values; only the separately labeled Brand daily trends use illustrative daily splits. Hybrid brand halves are counted once; their physical-site totals are excluded.</div><div class="kpis" id="report-overview-kpis"></div>
+    $("overview").innerHTML = `<div class="notice">Imported report data · 27 Oct 2026. Reported totals use no sample values. Separately labeled daily trends, traffic/check and map positions are illustrative; actual transaction counts and branch GPS are not mapped. Hybrid brand halves are counted once; their physical-site totals are excluded.</div><div class="kpis" id="report-overview-kpis"></div>
       <div class="ceo-grid ceo-graph-view">${card("Sales by brand", "report-overview-sales")}${card("Regional performance", "report-region")}</div>
       <div class="ceo-grid ceo-graph-view">${card("Top 5 branches by % change", "report-top", "Same-store only; highest comparable growth first.")}${card("Worst 5 branches by % change", "report-worst", "Same-store only; lowest comparable growth first.")}</div>
-      ${card("Branches on the map", "report-map", "", "ceo-graph-view")}
+      ${card("Branches on the map", "report-map")}
       ${card("Same-store growth by brand", "report-brand-growth", "", "ceo-graph-view")}
       ${card("Sales by source", "report-source", "The revenue comparison groups dine-in and takeaway together. Reported delivery follows the workbook definition.", "ceo-graph-view")}
       ${card("Same Store · brand · company", "report-finance")}
@@ -126,7 +169,13 @@
       ${card("Delivery penetration by brand", "report-brand-penetration", "Reported delivery definition; pickup-free penetration by brand is N/A until matched branch/order-type data is mapped.")}
       <article class="card ceo-full-card"><div class="table-head"><h2>Delivery penetration by store</h2><input class="search" id="report-delivery-search" type="search" aria-label="Search delivery stores" placeholder="Search stores or brands…"></div><div id="report-store-penetration" style="max-height:520px;overflow:auto"></div></article>
       ${card("Commission", "report-commission")}`;
-    $("menu").innerHTML = '<div class="notice">N/A — item-level sales, quantities and recipe costs are not mapped from these reports. Simulated menu results have been removed.</div>';
+    $("menu").innerHTML = `<div class="notice"><strong>DUMMY MENU DATA — not actual menu performance.</strong> Generic items and category splits allocate positive reported branch sales; negative sales adjustments are excluded. Quantities, prices and recipe costs are invented. Gross profit is illustrative, not accounting profit. Global period, brand, region and store-basis filters apply. No dummy values feed reported KPIs.</div><label class="field">MENU CATEGORY<select id="report-menu-category"><option value="all">All categories</option>${[...new Set(menuTemplates.map((item) => item.category))].map((category) => `<option>${escape(category)}</option>`).join("")}</select></label><div class="kpis" id="report-menu-kpis"></div><div class="ceo-grid ceo-graph-view">${card("Top 10 dummy menu items", "report-menu-top", "Illustrative CY vs LY sales allocations.")}${card("Dummy category sales mix", "report-menu-mix", "Illustrative CY vs LY allocations.")}</div>${card("Menu Engineering · dummy data", "report-menu-engineering", "Estimated units × illustrative gross profit per unit; bubble size reflects allocated sales.", "ceo-graph-view")}${card("Dummy menu item details", "report-menu-table", "All quantities and costs are illustrative; sales are allocated, not actual item sales.")}`;
+    let menuCategory = "all";
+    $("report-menu-category").onchange = (event) => {
+      menuCategory = event.target.value;
+      renderMenu(filtered());
+      navigate(state.page);
+    };
     document.querySelectorAll(".ceo-card-tag").forEach((tag) => { if (/sample|simulat/i.test(tag.textContent)) tag.remove(); });
     document.querySelector(".date-pill").textContent = "As of 27 Oct 2026 · imported reports";
     document.querySelector('[data-period="dtd"]').textContent = "27 Oct 2026";
@@ -135,7 +184,7 @@
     document.querySelectorAll("body *").forEach((el) => {
       if (el.children.length === 0 && el.textContent.trim() === "SAMPLE DATA") el.textContent = "JSON REPORT DATA";
     });
-    document.querySelector("main.content > footer").textContent = "Source: imported October 2026 reports in json_data. Not a live feed. Reported totals preserve source definitions. Brand daily trends are illustrative splits of actual MTD totals, not actual daily sales; other unavailable metrics are shown as N/A.";
+    document.querySelector("main.content > footer").textContent = "Source: imported October 2026 reports in json_data. Not a live feed. Reported totals preserve source definitions. Daily splits, traffic/check and map positions in labeled demo panels are illustrative, not reported measurements; other unavailable metrics are shown as N/A.";
     $("brand").replaceChildren(new Option("All brands", "all"), ...[...new Set(data.periods.mtd.stores.map((row) => row.brand))].sort().map((name) => new Option(name, name)));
     $("region").replaceChildren(new Option("All regions", "all"), ...[...new Set(data.periods.mtd.stores.map((row) => row.region))].sort().map((name) => new Option(name, name)));
     let storeQuery = "";
@@ -164,6 +213,7 @@
         } });
       bars("report-store-chart", matching.filter((row) => row.sss && row.ly > 0).slice(0, 10).map((row) => ({ label: row.name, current: row.cy, prior: row.ly })));
       table("report-store-penetration", penetrationHeaders, matches(deliveryQuery).map((row) => penetrationRecord(`${row.name} · ${row.brand}`, row)));
+      renderStoreTraffic(matching);
     }
     $("report-store-search").oninput = (event) => { storeQuery = event.target.value; renderStoreTables(filtered()); };
     $("report-delivery-search").oninput = (event) => { deliveryQuery = event.target.value; renderStoreTables(filtered()); };
@@ -191,6 +241,125 @@
           ["Actual MTD total (rounded)", money(brand.cy), money(brand.ly)],
         ]);
       });
+    }
+    function renderOverviewDemos(rs) {
+      chartInstances.get("report-demo-daily")?.destroy();
+      chartInstances.delete("report-demo-daily");
+      chartInstances.get("report-demo-traffic")?.destroy();
+      chartInstances.delete("report-demo-traffic");
+      const mtd = filtered("mtd");
+      $("report-trends").innerHTML = `<div class="notice"><strong>DUMMY DATA — not actual daily sales, traffic or average check.</strong> Daily sales are illustrative splits of actual 1–27 Oct MTD totals. Transactions and checks are invented for this preview and never feed reported KPIs. Both charts always use MTD; brand, region and store-basis filters apply.</div><div class="ceo-graph-view"><h3>Illustrative daily sales · 1–27 Oct</h3><div id="report-demo-daily"></div><h3>Dummy branch traffic × average check · MTD</h3><p>Each bubble is a reporting unit. X = dummy transactions; Y = dummy average check (SAR); bubble area scales with reported MTD sales. Non-positive sales are excluded.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll dummy traffic chart"><div style="position:relative;height:360px;min-width:520px"><canvas id="report-demo-traffic" tabindex="0" role="img" aria-label="Dummy MTD branch traffic versus average check"></canvas></div></div><p id="report-demo-traffic-detail" role="status">Hover a bubble or use the arrow keys to inspect dummy figures.</p></div><div class="ceo-table-view"><div id="report-demo-daily-table"></div><div id="report-demo-traffic-table"></div></div>`;
+      const amount = totals(mtd);
+      const days = mtd.length ? illustrativeBrandTrend("CEO Brief", amount.cy, amount.ly) : [];
+      bars("report-demo-daily", days, false, true);
+      table("report-demo-daily-table", ["October day", "Illustrative CY sales", "Illustrative LY sales"], days.map((day) => [day.label, money(day.current), money(day.prior)]));
+      renderTrafficChart(mtd, "report-demo-traffic", "MTD");
+      renderDemoMap(rs);
+    }
+    function renderStoreTraffic(rs) {
+      chartInstances.get("report-store-traffic-chart")?.destroy();
+      chartInstances.delete("report-store-traffic-chart");
+      const period = { dtd: "DTD · 27 Oct", mtd: "MTD · 1–27 Oct", ytd: "YTD · 1 Jan–27 Oct" }[state.period];
+      $("report-store-traffic").innerHTML = `<div class="notice"><strong>DUMMY DATA — not actual traffic or average check.</strong> Invented transactions and checks use reported ${escape(period)} sales as the basis. Global period, brand, region, store-basis filters and store search apply. Reported KPIs are unchanged. Non-positive sales are excluded.</div><div class="ceo-graph-view"><p>X = dummy transactions; Y = dummy average check (SAR); bubble area scales with reported sales. Each bubble is a reporting unit.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll dummy store traffic chart"><div style="position:relative;height:360px;min-width:520px"><canvas id="report-store-traffic-chart" tabindex="0" role="img" aria-label="Dummy store traffic versus average check"></canvas></div></div><p id="report-store-traffic-chart-detail" role="status">Hover a bubble or use the arrow keys to inspect dummy figures.</p></div><div class="ceo-table-view" id="report-store-traffic-chart-table"></div>`;
+      renderTrafficChart(rs, "report-store-traffic-chart", period);
+    }
+    function renderTrafficChart(rs, id, period) {
+      const traffic = rs.filter((row) => row.cy > 0).map((row) => ({ ...row, ...illustrativeTraffic(row.cy, row.id) }));
+      table(`${id}-table`, ["Branch", `Reported ${period} sales`, "Dummy transactions", "Dummy average check"], traffic.map((row) => [row.name, money(row.cy), row.transactions, money(row.check)]));
+      if (traffic.length) {
+        const maxSales = Math.max(...traffic.map((row) => row.cy));
+        const describe = (index) => {
+          const row = traffic[index];
+          return `${row.name} · DUMMY: ${row.transactions.toLocaleString("en-GB")} transactions × ${money(row.check)} average check · reported ${period} sales ${money(row.cy)}`;
+        };
+        const chart = new Chart($(id), {
+          type: "bubble",
+          data: { datasets: [{ label: "Dummy traffic × check", data: traffic.map((row) => ({ x: row.transactions, y: row.check, r: 5 + 17 * Math.sqrt(row.cy / maxSales) })), backgroundColor: "#4478ed80", borderColor: "#4478ed", borderWidth: 1 }] },
+          options: { responsive: true, maintainAspectRatio: false, animation: false,
+            scales: { x: { beginAtZero: true, title: { display: true, text: `Dummy ${period} transactions` } }, y: { beginAtZero: true, title: { display: true, text: "Dummy average check (SAR)" } } },
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => describe(context.dataIndex) } } },
+          },
+        });
+        chartInstances.set(id, chart);
+        chart.canvas.onkeydown = (event) => {
+          if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+          event.preventDefault();
+          const index = ((chart.getActiveElements()[0]?.index ?? -1) + (event.key === "ArrowRight" ? 1 : -1) + traffic.length) % traffic.length;
+          const active = [{ datasetIndex: 0, index }];
+          const point = chart.getDatasetMeta(0).data[index];
+          chart.setActiveElements(active);
+          chart.tooltip.setActiveElements(active, { x: point.x, y: point.y });
+          $(`${id}-detail`).textContent = describe(index);
+          chart.update("none");
+        };
+      } else {
+        $(id).parentElement.innerHTML = '<div class="empty">No positive sales in scope; no dummy traffic generated.</div>';
+      }
+    }
+    function renderDemoMap(rs) {
+      const anchors = { Central: [312, 192], Western: [170, 265], Eastern: [418, 150] };
+      const source = data.periods[state.period].stores;
+      const positioned = rs.filter((row) => anchors[row.region]);
+      const maxSales = Math.max(1, ...positioned.map((row) => Math.max(0, row.cy)));
+      $("report-map").innerHTML = `<div class="notice"><strong>ILLUSTRATIVE LOCATIONS — not branch GPS.</strong> Schematic Saudi Arabia map with invented regional placements. Sales and growth use the selected reporting period; bubble size scales with reported sales, color shows same-store growth: green ≥ 0%, amber −5% to 0%, red below −5%, grey non-comparable. Hybrid halves are reporting units, not separate physical sites.</div><div class="ceo-graph-view"><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll schematic branch map"><svg viewBox="0 0 560 380" style="display:block;width:100%;min-width:480px;max-height:520px" role="group" aria-label="Dummy branch locations on a schematic Saudi Arabia map"><path d="M92 57 L178 92 L215 70 L274 104 L355 101 L403 137 L432 180 L487 222 L474 275 L325 333 L249 347 L210 319 L182 276 L157 242 L137 204 L115 161 L75 125 Z" fill="#202d3d" stroke="#52647a" stroke-width="2"/><g fill="#a5b4c6" font-size="14" font-family="sans-serif"><text x="231" y="280">Saudi Arabia</text><text x="274" y="110">Central</text><text x="94" y="340">Western</text><text x="400" y="80">Eastern</text></g>${positioned.map((row, index) => {
+        const peers = source.filter((item) => item.region === row.region);
+        const position = peers.findIndex((item) => item.id === row.id);
+        const angle = position * 2.399963;
+        const distance = 9 * Math.sqrt(position);
+        const [x, y] = anchors[row.region];
+        const change = row.sss ? growth(row.cy, row.ly) : null;
+        const color = change === null ? "#718096" : change >= 0 ? "#168565" : change >= -5 ? "#b67d22" : "#d05c64";
+        const label = `${row.name} · illustrative location · reported sales ${money(row.cy)} · same-store growth ${percentage(change)}`;
+        return `<circle cx="${(x + Math.cos(angle) * distance).toFixed(2)}" cy="${(y + Math.sin(angle) * distance * 0.7).toFixed(2)}" r="${(4 + 8 * Math.sqrt(Math.max(0, row.cy) / maxSales)).toFixed(2)}" fill="${color}" stroke="#fff" stroke-width="1" tabindex="0" role="button" aria-pressed="false" aria-label="${escape(label)}" data-demo-branch="${index}"><title>${escape(label)}</title></circle>`;
+      }).join("")}</svg></div><p id="report-demo-map-detail" role="status">${positioned.length} reporting units plotted. Click a bubble or focus it and press Enter for branch figures.${rs.length > positioned.length ? ` ${rs.length - positioned.length} units have no schematic region mapping.` : ""}</p></div><div class="ceo-table-view" id="report-demo-map-table"></div>`;
+      table("report-demo-map-table", ["Branch", "Illustrative region placement", "Reported sales", "Same-store growth"], rs.map((row) => [row.name, row.region, money(row.cy), percentage(row.sss ? growth(row.cy, row.ly) : null)]));
+      $("report-map").querySelectorAll("[data-demo-branch]").forEach((bubble) => {
+        const select = () => {
+          $("report-map").querySelectorAll("[data-demo-branch]").forEach((item) => item.setAttribute("aria-pressed", String(item === bubble)));
+          $("report-demo-map-detail").textContent = bubble.getAttribute("aria-label");
+        };
+        bubble.onclick = select;
+        bubble.onkeydown = (event) => {
+          if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); }
+        };
+      });
+    }
+    function renderMenu(rs) {
+      const items = illustrativeMenu(rs).filter((item) => menuCategory === "all" || item.category === menuCategory);
+      const sales = sum(items, "cy");
+      const units = sum(items, "units");
+      const profit = sum(items, "profit");
+      kpis("report-menu-kpis", [
+        ["Dummy item entries", String(items.length), "Generic items per brand"],
+        ["Allocated sales", money(sales), "Positive source sales split, not item sales"],
+        ["Dummy units", units.toLocaleString("en-GB"), "Estimated, not POS quantities"],
+        ["Dummy gross margin", share(profit, sales), "Invented recipe costs; not actual margin"],
+      ]);
+      bars("report-menu-top", [...items].sort((a, b) => b.cy - a.cy).slice(0, 10).map((item) => ({ label: `${item.brand} · ${item.name}`, current: item.cy, prior: item.ly })));
+      bars("report-menu-mix", [...new Set(items.map((item) => item.category))].map((category) => {
+        const matches = items.filter((item) => item.category === category);
+        return { label: category, current: sum(matches, "cy"), prior: sum(matches, "ly") };
+      }));
+      table("report-menu-table", ["Brand", "Dummy item", "Category", "Allocated CY sales", "Allocated LY sales", "Dummy units", "Assumed unit cost", "Dummy gross profit"],
+        items.map((item) => [item.brand, item.name, item.category, money(item.cy), money(item.ly), item.units.toLocaleString("en-GB"), money(item.unitCost), money(item.profit)]));
+      chartInstances.get("report-menu-engineering")?.destroy();
+      chartInstances.delete("report-menu-engineering");
+      const positive = items.filter((item) => item.units > 0);
+      if (!positive.length) return unavailable("report-menu-engineering", "no positive sales in scope; no dummy menu quantities generated.");
+      const maximum = Math.max(...positive.map((item) => item.cy));
+      $("report-menu-engineering").innerHTML = '<div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll dummy menu engineering chart"><div style="position:relative;height:360px;min-width:520px"><canvas role="img" aria-label="Dummy menu units versus gross profit per unit; exact values in item details below"></canvas></div></div>';
+      const chart = new Chart($("report-menu-engineering").querySelector("canvas"), {
+        type: "bubble",
+        data: { datasets: [{ label: "Dummy menu performance", data: positive.map((item) => ({ x: item.units, y: item.profit / item.units, r: 4 + 15 * Math.sqrt(item.cy / maximum) })), backgroundColor: "#16856580", borderColor: "#168565", borderWidth: 1 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false,
+          scales: { x: { beginAtZero: true, title: { display: true, text: "Dummy units" } }, y: { title: { display: true, text: "Dummy gross profit per unit (SAR)" } } },
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => {
+            const item = positive[context.dataIndex];
+            return `${item.brand} · ${item.name}: ${item.units} dummy units, ${money(item.profit / item.units)} dummy profit/unit`;
+          } } } },
+        },
+      });
+      chartInstances.set("report-menu-engineering", chart);
     }
     function render() {
       const rs = filtered();
@@ -236,6 +405,7 @@
       kpis("report-delivery-kpis", [["Reported delivery sales", money(amount.delivery), "Workbook category; see definition below"], ["Reported delivery share", share(amount.delivery, amount.cy), "Of total selected revenue"], ["Last year reported delivery", money(amount.deliveryLy), "Revenue workbook comparison"], ["Dine-in & takeaway", money(amount.nonDelivery), "Source combined category"]]);
       table("report-brand-penetration", penetrationHeaders, brands.map((row) => penetrationRecord(row.name, row)));
       renderStoreTables(rs);
+      renderMenu(rs);
       const showChannels = state.period === "mtd" && state.region === "all" && state.brand === "all" && state.basis === "all";
       if (showChannels) {
         bars("report-vendor-chart", data.channels);
@@ -254,10 +424,8 @@
         unavailable("report-vendor-table", "a matched order-type breakdown is not loaded for this scope.");
         $("report-delivery-reconciliation").textContent = "Order-type breakdown is available for company MTD only. No sample split is substituted for filtered or other-period views.";
       }
-      unavailable("report-map", "exact branch coordinates are not supplied; illustrative locations have been removed.");
-      unavailable("report-trends", "daily series and transaction counts are not mapped in this integration. Period totals above are sourced, not simulated.");
+      renderOverviewDemos(rs);
       renderBrandTrends();
-      unavailable("report-store-traffic", "transaction counts and average checks are not mapped from source reports.");
       unavailable("report-commission", "contract commission rates are not supplied.");
       navigate(state.page);
     }
@@ -282,5 +450,5 @@
     }
     return { render, navigate };
   }
-  root.AlfaReportView = { create, illustrativeBrandTrend };
+  root.AlfaReportView = { create, illustrativeBrandTrend, illustrativeTraffic, illustrativeMenu };
 })(typeof window === "undefined" ? globalThis : window);

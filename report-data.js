@@ -210,7 +210,7 @@
       [revenueFile, deliveryFile].map(async (name) => {
         // Filenames literally contain "%20"; encode the percent signs as well.
         const response = await fetcher(
-          `https://raw.githubusercontent.com/alfacosubscription/all_test/refs/heads/main/json_data/${encodeURIComponent(name)}`,
+          `https://alfacosubscription.github.io/all_test/json_data/${encodeURIComponent(name)}`,
           { cache: "no-store" },
         );
         if (!response.ok)
