@@ -1,6 +1,35 @@
 (function (root) {
   "use strict";
   const chartColors = { current: "#299bb0", prior: "#075577", budget: "#ff9228" };
+  function alfredPeriodLabel(period) {
+    const label = { dtd: "Yesterday · 27 Oct 2026", mtd: "MTD · 1–27 Oct 2026", ytd: "YTD · 1 Jan–27 Oct 2026" }[period];
+    if (!label) throw new Error(`Invalid Alfred reporting period: ${period}`);
+    return label;
+  }
+  function alfredReportData(source = root.AlfaOctoberDaily) {
+    if (!source || !Array.isArray(source.branches) || !source.branches.length) {
+      throw new Error("Alfred branch source is missing or empty.");
+    }
+    const periods = Object.fromEntries(["dtd", "mtd", "ytd"].map((period) => {
+      const stores = source.branches.map((branch) => {
+        const values = branch[period];
+        for (const key of ["cy", "py", "dcy", "dpy", "vcy", "vpy", "bud"]) {
+          if (!Number.isFinite(values?.[key])) throw new Error(`Invalid Alfred ${period} ${key}: ${branch.name}`);
+        }
+        return {
+          id: branch.name, name: branch.name, brand: branch.brand, region: branch.region,
+          sss: branch.sss && !branch.new, new: branch.new,
+          cy: values.cy, ly: values.py, budget: values.bud,
+          delivery: values.vcy, deliveryLy: values.vpy,
+          nonDelivery: values.dcy, nonDeliveryLy: values.dpy,
+          checks: period === "ytd" ? null : branch.checks[period][0],
+          checksLy: period === "ytd" ? null : branch.checks[period][1],
+        };
+      });
+      return [period, { stores }];
+    }));
+    return { source: "alfred", asOf: source.asOf, periods };
+  }
   function alfredBriefMetrics(branches, period) {
     const metrics = alfredMetrics(branches, period);
     const sum = (rows, key) => rows.reduce((n, branch) => n + branch[period][key], 0);
@@ -119,8 +148,8 @@
   function alfredStoreMetrics(branch, period) {
     const metrics = alfredMetrics([branch], period);
     const ratio = (cy, ly) => ly > 0 ? (cy / ly - 1) * 100 : null;
-    const guestPeriod = period === "ytd" ? "mtd" : period;
-    const guests = branch.guests[guestPeriod];
+    const guestPeriod = period;
+    const guests = period === "ytd" ? null : branch.guests[guestPeriod];
     const annualSales = branch.mtd.cy / 27 * 365;
     return {
       ...metrics,
@@ -129,10 +158,10 @@
         branch.mtd.py > 0 && branch.mtd.cy < branch.mtd.py * 0.85 && branch.ytd.py > 0 && branch.ytd.cy < branch.ytd.py * 0.85 ||
         branch.mtd.bud > 0 && branch.mtd.cy < branch.mtd.bud * 0.85
       ),
-      guestGrowth: ratio(guests[0], guests[1]),
-      spend: guests[0] > 0 ? branch[guestPeriod].cy / guests[0] : null,
-      spendGrowth: guests[0] > 0 && guests[1] > 0 ? ratio(branch[guestPeriod].cy / guests[0], branch[guestPeriod].py / guests[1]) : null,
-      trafficEligible: branch.sss && !branch.new && guests[0] > 0 && guests[1] > 0 && branch[guestPeriod].py > 0,
+      guestGrowth: guests ? ratio(guests[0], guests[1]) : null,
+      spend: guests?.[0] > 0 ? branch[guestPeriod].cy / guests[0] : null,
+      spendGrowth: guests?.[0] > 0 && guests[1] > 0 ? ratio(branch[guestPeriod].cy / guests[0], branch[guestPeriod].py / guests[1]) : null,
+      trafficEligible: Boolean(branch.sss && !branch.new && guests?.[0] > 0 && guests[1] > 0 && branch[guestPeriod].py > 0),
       annualSales,
       occupancy: annualSales > 0 ? branch.sim.rentYear / annualSales * 100 : null,
       salesPerSqft: branch.sim.sqft > 0 ? annualSales / branch.sim.sqft : null,
@@ -280,11 +309,13 @@
     return items;
   }
   function create(data, state) {
+    if (data?.source !== "alfred") throw new Error("The dashboard requires the Alfred source adapter.");
     const $ = (id) => document.getElementById(id);
     ["overview", "brands", "stores", "menu", "delivery"].forEach((id) => $(id).classList.add("report-page"));
     const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     const money = (value) => value === null ? "N/A" : `SAR ${value.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const count = (value) => value === null ? "N/A" : value.toLocaleString("en-GB");
     const growth = (cy, ly) => ly > 0 ? (cy / ly - 1) * 100 : null;
     const percentage = (value) => value === null ? "N/A" : `${value.toFixed(1)}%`;
     const share = (value, total) => total > 0 ? percentage(value / total * 100) : "N/A";
@@ -355,6 +386,30 @@
         `<article class="kpi${String(value).startsWith("SAR ") ? " report-kpi-wide" : ""}"><div class="kpi-top">${escape(label)}</div><div class="kpi-value">${escape(value)}</div><div class="kpi-bottom">${escape(detail)}</div></article>`).join("");
     };
     function compactNotices() {
+      const scopes = [
+        [["report-sales-budget", "report-brief-bridge", "report-brief-ranking", "report-brief-story", "report-finance",
+          "report-brand-manager", "report-alfred-brand-sales", "report-alfred-brand-budget", "report-brand-gap",
+          "report-brand-contribution", "report-brand-store-map", "report-brand-city-map", "report-map",
+          "report-store-scope", "report-store-traffic", "report-brand-penetration", "report-store-penetration"], alfredPeriodLabel(state.period)],
+        [["report-october-daily", "report-overview-brand-daily", "report-alfred-brand-daily",
+          "report-source-store-daily", "report-brief-weekdays"], "Fixed October daily series · 1–27 Oct 2026"],
+        [["report-brand-month", "report-source-store-month", "report-alfred-delivery-vendors",
+          "report-alfred-delivery-share"], "Fixed Jan–Oct timeline · October through 27 Oct"],
+        [["report-brief-comparisons", "report-brand-comparisons", "report-source-store-comparisons",
+          "report-source-store-detail", "report-source-store-watch"], "Fixed source comparisons · Yesterday / MTD / YTD"],
+        [["report-brand-new", "report-source-store-peers", "report-source-store-economics",
+          "report-alfred-delivery-commission", "report-alfred-delivery-brands"], "Fixed October MTD source · not the global period"],
+        [["report-menu-top", "report-menu-engineering", "report-menu-movers", "report-menu-attachment",
+          "report-menu-pairs", "report-menu-spend", "report-menu-table"], "Fixed October e-invoice sample · not the global period"],
+        [["report-brief-holidays", "report-brand-holidays", "report-source-store-holidays"], "Fixed 2026 / 2025 holiday totals"],
+      ];
+      for (const [ids, label] of scopes) for (const id of ids) {
+        const article = $(id)?.closest("article.card");
+        const heading = article?.querySelector("h2");
+        if (!heading) continue;
+        if (!heading.dataset.sourceTitle) heading.dataset.sourceTitle = heading.textContent;
+        heading.textContent = `${heading.dataset.sourceTitle} — ${label}`;
+      }
       document.querySelectorAll(".report-page div.notice:not([id])").forEach((notice) => {
         const details = document.createElement("details");
         details.className = "notice report-methodology";
@@ -412,26 +467,26 @@
     }
     const financeHeaders = ["Brand / store", "Sales", "Last year", "Change SAR", "Change %", "Budget", "vs budget SAR"];
     const financeRecord = (name, amount) => [name, money(amount.cy), money(amount.ly), money(amount.cy - amount.ly), percentage(growth(amount.cy, amount.ly)), money(amount.budget), money(amount.budget === null ? null : amount.cy - amount.budget)];
-    const penetrationHeaders = ["Brand / store", "Total revenue", "Reported delivery", "Reported delivery %", "Dine-in & takeaway", "Non-delivery %"];
+    const penetrationHeaders = ["Brand / store", "Total revenue", "Alfred delivery", "Delivery %", "Alfred dine-in", "Dine-in %"];
     const penetrationRecord = (name, amount) => [name, money(amount.cy), money(amount.delivery), share(amount.delivery, amount.cy), money(amount.nonDelivery), share(amount.nonDelivery, amount.cy)];
     const group = (rs, key) => [...new Set(rs.map((row) => row[key]))].sort().map((name) => ({ name, ...totals(rs.filter((row) => row[key] === name)) }));
     $("overview").innerHTML = `<div class="notice">Imported report data · 27 Oct 2026. Reported totals use no sample values. Separately labeled daily trends, traffic/check and map positions are illustrative; actual transaction counts and branch GPS are not mapped. Hybrid brand halves are counted once; their physical-site totals are excluded.</div><div class="kpis" id="report-overview-kpis"></div>
       <div class="ceo-grid report-brief-trends">${card("Daily sales — October", "report-october-daily")}${card("Why sales moved — bridge from last year", "report-brief-bridge", "Start at last year, add or take away each reason, and end at this year. Source sales; guests are estimates. YTD uses same-store change without a guest split.")}</div>
       <div class="ceo-grid report-brief-comparison-row">${card("Sales vs budget — company and brands", "report-sales-budget")}${card("Every comparison at a glance", "report-brief-comparisons", "Teal = up; coral = down. Yesterday: 27 Oct; last week: 20 Oct. MoM compares sales/day, October vs September.")}</div>
-      <div class="ceo-grid report-brief-seasonality">${card("Ramadan & Eid — like for like", "report-brief-holidays", "Source Ramadan and Eid al-Fitr totals; Eid al-Adha is a separately labeled mock estimate.")}${card("Which weekdays are slipping", "report-brief-weekdays", "Average daily sales per aligned weekday, 1–27 October; independent of period selection.")}</div>
+      <div class="ceo-grid report-brief-seasonality">${card("Ramadan & Eid — like for like", "report-brief-holidays", "Alfred Ramadan and Eid al-Fitr totals. Eid al-Adha sales are unavailable.")}${card("Which weekdays are slipping", "report-brief-weekdays", "Average daily sales per aligned weekday, 1–27 October; independent of period selection.")}</div>
       ${card("Alfred says — executive readout", "report-brief-story")}
       ${card("Sales map", "report-map")}
       ${card("October daily sales — by brand", "report-overview-brand-daily", "Actual Alfred source series for 1–27 October 2026. Global brand, region and store-basis filters apply; period selection does not change this October timeline. Teal = this year; dashed navy = last year.")}
       ${card("Look at today — alerts", "report-brief-alerts")}
       ${card("Same-store growth — every store", "report-brief-ranking", "All comparable Alfred stores, replacing the limited Top/Worst panels. Click Inspect to open the store detail.")}
-      ${card("Validated financial totals", "report-finance", "Revenue workbook figures underpin the KPIs; Alfred panels use a separately disclosed source.", "ceo-table-view")}`;
+      ${card("Alfred financial totals", "report-finance", "The same Alfred branch figures underpin every selected-period KPI, chart and financial table.", "ceo-table-view")}`;
     $("brands").innerHTML = `${card("Brand manager view", "report-brand-manager")}
       ${card("Brands — every comparison", "report-brand-comparisons", "Yesterday, weekly, monthly and year-on-year comparisons use Alfred's fixed reporting dates. Heat cells are relative percentage changes; exact amounts appear in Table View.")}
       <div class="ceo-grid">${card("Sales by brand — this year vs last year", "report-alfred-brand-sales")}${card("Budget attainment by brand", "report-alfred-brand-budget")}</div>
       <div class="ceo-grid">${card("Budget gap by store", "report-brand-gap")}${card("New stores — shown separately", "report-brand-new", "Alfred new-store flags. MTD sales/day compared with the same source brand's mature same-store average across all regions; new stores are excluded from same-store growth.")}</div>
       ${card("Contribution to the change — by brand", "report-brand-contribution", "Selected-period source sales minus last year. Positive brands offset declining brands; amounts reconcile to the source scope change.")}
       <div class="ceo-grid">${card("Brand across its stores", "report-brand-store-map")}${card("Brand overall — by city", "report-brand-city-map")}</div>
-      <div class="ceo-grid">${card("Month by month — this year, last year, budget", "report-brand-month", "January–October 2026; October covers 1–27 only.")}${card("Ramadan & Eid by brand", "report-brand-holidays", "Ramadan: 18 Feb–19 Mar 2026 vs 1–29 Mar 2025. Eid al-Fitr: three days each. Mock Eid al-Adha = 90% of source Eid al-Fitr, not actual event sales.")}</div>
+      <div class="ceo-grid">${card("Month by month — this year, last year, budget", "report-brand-month", "January–October 2026; October covers 1–27 only.")}${card("Ramadan & Eid by brand", "report-brand-holidays", "Ramadan: 18 Feb–19 Mar 2026 vs 1–29 Mar 2025. Eid al-Fitr: three days each. Eid al-Adha sales are unavailable.")}</div>
       ${card("Daily trend per brand — October", "report-alfred-brand-daily", "Actual source daily series, not illustrative splits. Each brand uses its own scale; dashed navy = last year.")}`;
     $("stores").innerHTML = `${card("Stores — Alfred source scope", "report-store-scope")}
       <div class="table-head report-search"><label for="report-store-search">Search stores</label><input class="search" id="report-store-search" type="search" aria-label="Search stores" placeholder="Search stores, brands or cities…"></div>
@@ -440,12 +495,12 @@
       <div class="ceo-grid">${card("October day by day", "report-source-store-daily", "1–27 October 2026. Same weekday last week starts on day 8.")}${card("Month by month", "report-source-store-month", "January–October 2026; October covers 1–27 only.")}</div>
       ${card("Against its peers — same brand, MTD", "report-source-store-peers", "Top 12 trading peers across all Alfred regions, plus the selected store. Rank uses the full source brand, not the filtered list.")}
       <div class="ceo-grid">${card("Store economics — simulated inputs", "report-source-store-economics", "Alfred's simulated size, seating, table and rent inputs. Annual sales extrapolate October MTD / 27 × 365; not an actual annual forecast.")}${card("Ramadan & Eid — selected store", "report-source-store-holidays", "Aligned source event totals. Ramadan: 18 Feb–19 Mar 2026 vs 1–29 Mar 2025. Eid al-Fitr: 20–22 Mar 2026 vs 30 Mar–1 Apr 2025.")}</div>
-      <div class="ceo-grid">${card("Traffic × check — same-store", "report-store-traffic", "Guest growth × spend per guest growth; bubble area = source sales. Guest/check counts are estimates, not a POS feed. YTD selection uses October MTD traffic.")}${card("Watchlist", "report-source-store-watch", "MTD sales ≥ SAR 30,000 and either MTD + YTD declines worse than 15%, or MTD budget attainment below 85%. Fixed MTD/YTD criteria.")}</div>
-      ${card("Sales per seat-hour · illustrative RevPASH", "report-store-seat-hour")}`;
-    $("delivery").innerHTML = `<div class="notice"><strong>Source: Alfred delivery report.</strong> The summary and four panels below are fixed company-wide January–October 2026 data; October covers 1–27. Like Alfred, they do not change with global period, brand, region or store-basis filters: no matched allocation is supplied. Virtual brands are retained under their source names, not mapped to physical kitchen brands. Commission is an estimate using Alfred's source contract rates; VAT basis remains unconfirmed. Validated-report detail in Table View follows its stated scope.</div><div class="kpis" id="report-delivery-kpis"></div>
-      <div class="ceo-grid">${card("Delivery sales by aggregator — 2026", "report-alfred-delivery-vendors", "Stacked monthly sales. Keeta, Hunger Station, Jahez, other aggregators and Sufra app; October is partial.")}${card("Delivery share of sales", "report-alfred-delivery-share", "Monthly source delivery / source total net sales, not the validated revenue-workbook denominator.")}</div>
+      <div class="ceo-grid">${card("Traffic × check — same-store", "report-store-traffic", "Guest growth × spend per guest growth; bubble area = source sales. Guest/check counts are Alfred estimates, not a POS feed. YTD traffic is unavailable.")}${card("Watchlist", "report-source-store-watch", "MTD sales ≥ SAR 30,000 and either MTD + YTD declines worse than 15%, or MTD budget attainment below 85%. Fixed MTD/YTD criteria.")}</div>
+      ${card("Sales per seat-hour · RevPASH unavailable", "report-store-seat-hour")}`;
+    $("delivery").innerHTML = `<div class="notice"><strong>Source: Alfred delivery report.</strong> The summary and four panels below are fixed company-wide January–October 2026 data; October covers 1–27. Like Alfred, they do not change with global period, brand, region or store-basis filters: no matched allocation is supplied. Virtual brands are retained under their source names, not mapped to physical kitchen brands. Commission is an estimate using Alfred's source contract rates; VAT basis remains unconfirmed. Alfred branch penetration in Table View follows the selected period and filters.</div><div class="kpis" id="report-delivery-kpis"></div>
+      <div class="ceo-grid">${card("Delivery sales by aggregator — 2026", "report-alfred-delivery-vendors", "Stacked monthly sales. Keeta, Hunger Station, Jahez, other aggregators and Sufra app; October is partial.")}${card("Delivery share of sales", "report-alfred-delivery-share", "Monthly Alfred delivery / Alfred total net sales.")}</div>
       <div class="ceo-grid">${card("Estimated commission — October MTD", "report-alfred-delivery-commission", "Vendor sales × source contract rate. Includes zero-rate vendors in Table View. VAT basis to confirm.")}${card("Delivery by brand incl. virtual brands — Oct MTD vs LY", "report-alfred-delivery-brands", "Earth Bowlz, Curry Club, Pat & Gino and other virtual brands remain distinct from their host kitchens.")}</div>
-      ${card("Validated revenue categories — selected scope", "report-channel-table", "", "ceo-table-view")}
+      ${card("Alfred revenue categories — selected scope", "report-channel-table", "", "ceo-table-view")}
       ${card("Delivery order types — source figures", "report-vendor-table", "", "ceo-table-view")}
       <div class="notice ceo-table-view" id="report-delivery-reconciliation"></div>
       ${card("Delivery penetration by brand", "report-brand-penetration", "Reported delivery definition; pickup-free penetration by brand is N/A until matched branch/order-type data is mapped.", "ceo-table-view")}
@@ -457,10 +512,8 @@
       <div class="ceo-grid">${card("Top 15 items — October sample", "report-menu-top", "October sales; rank movement compares September sales per 1,000 checks.")}${card("Menu engineering — simulated cost", "report-menu-engineering", "Actual sample units per 1,000 checks × price less simulated recipe cost. Stars: keep; Plowhorses: re-price; Puzzles: promote; Dogs: review.")}</div>
       ${card("Item by item — DoD, WoW, MoM, YoY", "report-menu-table", "Changes in units per 1,000 checks: DoD = 27 vs 20 Oct; WoW = 21–27 vs 14–20 Oct; MoM = Oct 1–27 vs Sep 1–27; YoY = Oct 1–27 2026 vs Oct 2–28 2025. Different sample coverage; not like-for-like store growth.", "ceo-table-view")}
       <div class="ceo-grid">${card("Biggest movers — month on month", "report-menu-movers", "At least 5 units per 1,000 checks in both October and September. Up to eight rising and eight falling items.")}${card("Category mix and attachment", "report-menu-attachment", "Fixed full e-invoice sample, not brand/category/search filtered. Percentage of checks including a category; categories can overlap.")}</div>
-      <div class="ceo-grid">${card("Bought together — combo ideas", "report-menu-pairs", "October same-check pairs. Lift above 1 indicates association above chance. Item filters match either member of a pair.")}${card("Spend per check by store type", "report-menu-spend", "Source brand scope only; category/search do not change check-level metrics. Missing LY checks are shown as a labeled mock estimate.")}</div>
-      ${card("Missing menu coverage — mock preview", "report-menu-mock", "Only shown when matching e-invoice data is absent. Generic items allocate positive validated sales; quantities and recipe costs are assumed, not actual item performance.")}`;
+      <div class="ceo-grid">${card("Bought together — combo ideas", "report-menu-pairs", "October same-check pairs. Lift above 1 indicates association above chance. Item filters match either member of a pair.")}${card("Spend per check by store type", "report-menu-spend", "Source brand scope only; category/search do not change check-level metrics. Missing LY checks show N/A.")}</div>`;
     let menuCategory = "all";
-    let mockMenuCategory = "all";
     let menuFocus = "all";
     let menuQuery = "";
     $("report-store-seat-hour").closest("article").insertAdjacentHTML("afterend",
@@ -473,16 +526,16 @@
     $("report-menu-focus").onchange = (event) => { menuFocus = event.target.value; menuCategory = "all"; renderMenu(); navigate(state.page); };
     $("report-menu-search").oninput = (event) => { menuQuery = event.target.value; renderMenu(); navigate(state.page); };
     document.querySelectorAll(".ceo-card-tag").forEach((tag) => { if (/sample|simulat/i.test(tag.textContent)) tag.remove(); });
-    document.querySelector(".date-pill").textContent = "As of 27 Oct 2026 · imported reports";
+    document.querySelector(".date-pill").textContent = "As of 27 Oct 2026 · Alfred source";
     document.querySelector('[data-period="dtd"]').textContent = "Yesterday";
     document.querySelector('[data-period="dtd"]').title = "Presentation yesterday: 27 Oct 2026";
     const headerTag = document.querySelector(".header-right .tag, .topbar .tag, .topbar .badge");
-    if (headerTag) headerTag.textContent = "JSON REPORT DATA";
+    if (headerTag) headerTag.textContent = "ALFRED SOURCE DATA";
     document.querySelectorAll("body *").forEach((el) => {
-      if (el.children.length === 0 && el.textContent.trim() === "SAMPLE DATA") el.textContent = "JSON REPORT DATA";
+      if (el.children.length === 0 && el.textContent.trim() === "SAMPLE DATA") el.textContent = "ALFRED SOURCE DATA";
     });
-    document.querySelector("main.content > footer").textContent = "Source: validated October 2026 revenue/delivery reports and separately disclosed Alfred daily, budget, Brands, Stores, Menu and Delivery figures. Not a live feed. Menu uses a limited e-invoice sample with simulated recipe costs. Alfred commissions and guests/checks are estimates; economics inputs are simulated. CEO transactions/average check, RevPASH and POS adjustments are illustrative; unavailable metrics show N/A.";
-    $("overview").querySelector(".notice").textContent = "Imported report data · 27 Oct 2026. Validated financial totals use no sample values. CEO Transactions and Average check are illustrative presentation values: assumed transactions per positive-sales reporting unit, with average check = positive sales / total assumed transactions. Zero/negative sales are excluded from these two metrics only. Alfred panels use a separately disclosed source. Hybrid brand halves are counted once in validated totals; duplicate physical-site totals are excluded.";
+    document.querySelector("main.content > footer").textContent = "Source: Alfred report, as of 27 Oct 2026. All financial figures, branch coordinates, daily/monthly series, Menu and Delivery samples come from Alfred. Not a live feed. Alfred guests/checks and commissions are estimates; store economics and recipe costs are simulated in the source. Missing YTD traffic, POS adjustments and trading-hour data show N/A. Fixed-period samples are labeled separately from the selected period.";
+    $("overview").querySelector(".notice").textContent = "Alfred source · 27 Oct 2026 · 94 branches. CEO, Brands and Stores use the same branch figures and source same-store flags. Hybrid and Asian Dining remain combined source brands. Transactions use Alfred's estimated checks; YTD checks are unavailable. No validated JSON totals or additional mock figures are substituted.";
     $("brand").replaceChildren(new Option("All brands", "all"), ...[...new Set(data.periods.mtd.stores.map((row) => row.brand))].sort().map((name) => new Option(name, name)));
     $("region").replaceChildren(new Option("All regions", "all"), ...[...new Set(data.periods.mtd.stores.map((row) => row.region))].sort().map((name) => new Option(name, name)));
     let storeQuery = "";
@@ -495,9 +548,8 @@
       const matches = (query) => rs.filter((row) => `${row.name} ${row.brand}`.toLowerCase().includes(query.toLowerCase()));
       table("report-store-penetration", penetrationHeaders, matches(deliveryQuery).map((row) => penetrationRecord(`${row.name} · ${row.brand}`, row)));
       renderAlfredStores();
-      const matching = matches(storeQuery);
-      renderSeatHour(matching);
-      renderAdjustments(matching);
+      unavailable("report-store-seat-hour", "Alfred does not provide verified trading hours for RevPASH.");
+      unavailable("report-store-adjustments", "Alfred does not provide POS discounts, voids or complimentary-check amounts.");
       compactNotices();
     }
     $("report-store-search").oninput = (event) => { storeQuery = event.target.value; renderStoreTables(filtered()); navigate(state.page); };
@@ -510,7 +562,7 @@
       const rows = branches.filter((branch) => branch.mtd.cy || branch.mtd.py || branch.ytd.cy).map((branch) => ({
         branch, ...alfredStoreMetrics(branch, "mtd"),
       }));
-      $("report-store-scope").innerHTML = `${alfredNotice()}<label class="field">ALFRED STORE BRAND FOCUS<select id="report-store-focus"><option value="all">All brands in selected scope</option>${[...new Set(root.AlfaOctoberDaily.branches.map((branch) => branch.brand))].sort().map((name) => `<option${storeFocus === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><p class="ceo-chart-note">Focus narrows the global filters for Alfred panels only. Select global All brands to access Hybrid / Asian Dining. Search applies to the store list, picker, watchlist and traffic. RevPASH and adjustments below keep their validated-report scope and assumptions.</p><div class="kpis" id="report-store-kpis"></div>`;
+      $("report-store-scope").innerHTML = `${alfredNotice()}<label class="field">ALFRED STORE BRAND FOCUS<select id="report-store-focus"><option value="all">All brands in selected scope</option>${[...new Set(root.AlfaOctoberDaily.branches.map((branch) => branch.brand))].sort().map((name) => `<option${storeFocus === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><p class="ceo-chart-note">Focus narrows global filters. Search applies to the store list, picker, watchlist and traffic. Fixed-period comparisons retain their stated source dates. RevPASH and POS adjustments are unavailable in Alfred.</p><div class="kpis" id="report-store-kpis"></div>`;
       $("report-store-focus").onchange = (event) => { storeFocus = event.target.value; renderAlfredStores(); compactNotices(); navigate(state.page); };
       const scopeMetrics = alfredMetrics(branches, state.period);
       kpis("report-store-kpis", [
@@ -638,15 +690,14 @@
       $("report-source-store-economics-chart").innerHTML = '<div class="kpis" id="report-source-store-econ-kpis"></div>';
       kpis("report-source-store-econ-kpis", econCards);
       table("report-source-store-economics-table", ["Metric", "Value", "Basis"], econCards);
-      const holidays = [["Ramadan", ...branch.hol.ramadan], ["Eid al-Fitr", ...branch.hol.eidFitr], ["Eid al-Adha (mock)", ...presentationGaps([branch], state.period).eidAdha]];
+      const holidays = [["Ramadan", ...branch.hol.ramadan], ["Eid al-Fitr", ...branch.hol.eidFitr]];
       brandChart("report-source-store-holidays-chart", holidays.map((row) => row[0]), [
         { label: "2026", data: holidays.map((row) => row[1]) }, { label: "2025", data: holidays.map((row) => row[2]) },
       ]);
       table("report-source-store-holidays-table", ["Holiday", "2026", "2025", "Change", "Basis"], holidays.map(([name, cy, py]) => [name, money(cy), money(py), percentage(growth(cy, py)), name.includes("mock") ? "Mock: 90% of source Eid al-Fitr" : "Alfred event totals"]));
       if (!branch.hol.ramadan.some(value => value > 0)) $("report-source-store-holidays").insertAdjacentHTML("beforeend", '<p class="ceo-chart-note">Not open in Ramadan in the Alfred sample; no Ramadan comparison available.</p>');
       if (state.period === "ytd") {
-        const guests = illustrativeTraffic(branch.ytd.cy, branch.name).transactions;
-        $("report-source-store-kpis").insertAdjacentHTML("beforeend", `<article class="kpi"><div class="kpi-top">Guests YTD · mock</div><div class="kpi-value">${guests.toLocaleString("en-GB")}</div><div class="kpi-bottom">Assumed guests from positive YTD sales; not actual traffic</div></article><article class="kpi"><div class="kpi-top">Spend / guest YTD · mock</div><div class="kpi-value">${money(guests ? Math.max(0, branch.ytd.cy) / guests : null)}</div><div class="kpi-bottom">YTD sales / assumed guests; source MTD estimates above stay unchanged</div></article>`);
+        $("report-source-store-kpis").insertAdjacentHTML("beforeend", '<article class="kpi"><div class="kpi-top">Guests YTD</div><div class="kpi-value">N/A</div><div class="kpi-bottom">Not provided by Alfred</div></article><article class="kpi"><div class="kpi-top">Spend / guest YTD</div><div class="kpi-value">N/A</div><div class="kpi-bottom">Not provided by Alfred</div></article>');
       }
     }
     function enableChartZoom(chart) {
@@ -907,12 +958,12 @@
         { label: "Budget", type: "line", data: amount.monthly.budget },
       ]);
       table("report-brand-month-table", ["Month", "This year", "Last year", "Budget"], branches.length ? source.months.map((month, i) => [month, money(amount.monthly.cy[i]), money(amount.monthly.py[i]), money(amount.monthly.budget[i])]) : []);
-      const holidayLabels = rows.flatMap((row) => [`${row.name} · Ramadan`, `${row.name} · Eid al-Fitr`, `${row.name} · Eid al-Adha (mock)`]);
+      const holidayLabels = rows.flatMap((row) => [`${row.name} · Ramadan`, `${row.name} · Eid al-Fitr`]);
       brandChart("report-brand-holidays-chart", holidayLabels, [
-        { label: "2026", data: rows.flatMap((row) => [row.holidays.ramadan[0], row.holidays.eidFitr[0], Math.round(row.holidays.eidFitr[0] * 90) / 100]) },
-        { label: "2025", data: rows.flatMap((row) => [row.holidays.ramadan[1], row.holidays.eidFitr[1], Math.round(row.holidays.eidFitr[1] * 90) / 100]) },
+        { label: "2026", data: rows.flatMap((row) => [row.holidays.ramadan[0], row.holidays.eidFitr[0]]) },
+        { label: "2025", data: rows.flatMap((row) => [row.holidays.ramadan[1], row.holidays.eidFitr[1]]) },
       ]);
-      table("report-brand-holidays-table", ["Brand", "Ramadan 2026", "Ramadan 2025", "Ramadan change", "Eid 2026", "Eid 2025", "Eid change", "Mock Adha 2026", "Mock Adha 2025"], allRows.map((row) => [row.name, ...row.holidays.ramadan.map(money), percentage(growth(...row.holidays.ramadan)), ...row.holidays.eidFitr.map(money), percentage(growth(...row.holidays.eidFitr)), ...row.holidays.eidFitr.map((value) => money(Math.round(value * 90) / 100))]));
+      table("report-brand-holidays-table", ["Brand", "Ramadan 2026", "Ramadan 2025", "Ramadan change", "Eid 2026", "Eid 2025", "Eid change"], allRows.map((row) => [row.name, ...row.holidays.ramadan.map(money), percentage(growth(...row.holidays.ramadan)), ...row.holidays.eidFitr.map(money), percentage(growth(...row.holidays.eidFitr))]));
       renderBrandDaily("report-alfred-brand-daily", rows);
       renderBrandMaps(branches);
     }
@@ -943,13 +994,12 @@
         name, ...alfredMetrics(branches.filter((branch) => branch.brand === name), state.period),
       }));
       const worstBudget = brandRows.filter((row) => row.budget > 0).sort((a, b) => a.cy - a.budget - (b.cy - b.budget))[0];
-      const gaps = presentationGaps(branches, state.period);
       $("report-brief-story").innerHTML = branches.length
         ? `<p>Alfred source sales are <strong>${money(metrics.cy)}</strong>, ${percentage(metrics.growth)} vs LY and ${percentage(metrics.attainment)} of budget. Same-store growth is ${percentage(metrics.sameGrowth)}.${worstBudget ? ` Largest budget gap: <strong>${escape(worstBudget.name)}</strong> (${money(worstBudget.cy - worstBudget.budget)}).` : ""}</p><p>Dine-in source change ${percentage(metrics.dineGrowth)}; delivery ${percentage(metrics.deliveryGrowth)}. ${metrics.newCount} new stores contribute ${money(metrics.newSales)}. ${metrics.ranked.filter((row) => row.growth < -25).length} material comparable stores are down more than 25%.</p><div class="kpis" id="report-brief-source-kpis"></div>`
         : '<div class="empty">No Alfred branches match the selected filters.</div>';
       if (branches.length) kpis("report-brief-source-kpis", [
-        ["Same-store guests", (state.period === "ytd" ? gaps.guests : metrics.guests).toLocaleString("en-GB"), state.period === "ytd" ? `Mock YTD · ${percentage(gaps.guestGrowth)} vs assumed LY guests` : `Alfred estimates · ${percentage(metrics.guestGrowth)} vs LY`],
-        ["Spend / guest", money(state.period === "ytd" ? gaps.spend : metrics.spend), state.period === "ytd" ? `Mock YTD · ${percentage(gaps.spendGrowth)} vs assumed LY spend` : `Alfred estimates · ${percentage(metrics.spendGrowth)} vs LY`],
+        ["Same-store guests", state.period === "ytd" ? "N/A" : metrics.guests.toLocaleString("en-GB"), state.period === "ytd" ? "YTD guests are not provided by Alfred" : `Alfred estimates · ${percentage(metrics.guestGrowth)} vs LY`],
+        ["Spend / guest", money(metrics.spend), state.period === "ytd" ? "YTD guests are not provided by Alfred" : `Alfred estimates · ${percentage(metrics.spendGrowth)} vs LY`],
         ["Sales / store / day", money(metrics.salesPerStoreDay), `${metrics.trading} source stores trading · selected period`],
         ["New stores", String(metrics.newCount), `${money(metrics.newSales)} source sales · selected period`],
       ]);
@@ -967,7 +1017,7 @@
       }
       if (bridge.length) {
         const effects = bridge.slice(1, -1).map((step) => `${escape(step.label)} ${step.value >= 0 ? "added" : "took away"} <strong>${money(Math.abs(step.value))}</strong>.`).join(" ");
-        $("report-brief-bridge-chart").insertAdjacentHTML("beforeend", `<p class="report-bridge-readout"><strong>In plain words.</strong> Start with last year's <strong>${money(metrics.ly)}</strong>. ${effects} That leaves this year's <strong>${money(metrics.cy)}</strong>. Guest/spend estimates are separate from validated financial totals.</p>`);
+        $("report-brief-bridge-chart").insertAdjacentHTML("beforeend", `<p class="report-bridge-readout"><strong>In plain words.</strong> Start with last year's <strong>${money(metrics.ly)}</strong>. ${effects} That leaves this year's <strong>${money(metrics.cy)}</strong>. Guests and spend use Alfred's source estimates.</p>`);
       }
       table("report-brief-bridge-table", ["Metric", "Sales / change", "Running total"], bridge.map((step) => [step.label, money(step.value), money(step.range[1])]));
       const comparisons = ["yesterdayVsWeek", "yesterdayVsLy", "wow", "mom", "mtdGrowth", "ytdGrowth", "mtdBudgetGrowth"];
@@ -1005,7 +1055,7 @@
         const button = document.createElement("button"); button.type = "button"; button.className = "report-store-inspect"; button.textContent = "Inspect";
         button.setAttribute("aria-label", `Inspect ${metrics.ranked[i].branch.name}`); button.onclick = () => inspect(metrics.ranked[i].branch.name); tr.children[0].append(" ", button);
       });
-      const holidays = branches.length ? [["Ramadan", ...metrics.holidays.ramadan], ["Eid al-Fitr", ...metrics.holidays.eidFitr], ["Eid al-Adha (mock)", ...gaps.eidAdha]] : [];
+      const holidays = branches.length ? [["Ramadan", ...metrics.holidays.ramadan], ["Eid al-Fitr", ...metrics.holidays.eidFitr]] : [];
       brandChart("report-brief-holidays-chart", holidays.map((row) => row[0]), [{ label: "2026", data: holidays.map((row) => row[1]) }, { label: "2025", data: holidays.map((row) => row[2]) }]);
       table("report-brief-holidays-table", ["Holiday", "2026", "2025", "Change", "Basis"], holidays.map(([name, cy, ly]) => [name, money(cy), money(ly), percentage(growth(cy, ly)), name.includes("mock") ? "Mock: 90% of source Eid al-Fitr" : "Alfred event totals"]));
       brandChart("report-brief-weekdays-chart", branches.length ? metrics.weekdays.map((row) => row.name) : [], [{ label: "This year", data: metrics.weekdays.map((row) => row.cy) }, { label: "Last year", data: metrics.weekdays.map((row) => row.ly) }]);
@@ -1013,25 +1063,32 @@
     }
     function renderBrandMaps(branches) {
       brandMapObserver.disconnect();
-      const guestPeriod = state.period === "dtd" ? "dtd" : "mtd";
+      const guestPeriod = state.period;
       const points = branches.map((branch) => ({
         name: branch.name, brand: branch.brand, city: branch.city, lat: branch.lat, lng: branch.lng, n: 1,
         cy: branch[state.period].cy, py: branch[state.period].py, bud: branch[state.period].bud,
-        g: branch.guests[guestPeriod][0], chk: branch.checks[guestPeriod][0],
+        g: guestPeriod === "ytd" ? null : branch.guests[guestPeriod][0], chk: guestPeriod === "ytd" ? null : branch.checks[guestPeriod][0],
       }));
       const cities = [...new Set(points.map((point) => point.city))].map((city) => {
         const peers = points.filter((point) => point.city === city);
         return { name: city, n: peers.length, lat: sum(peers, "lat") / peers.length, lng: sum(peers, "lng") / peers.length,
-          cy: sum(peers, "cy"), py: sum(peers, "py"), bud: sum(peers, "bud"), g: sum(peers, "g"), chk: sum(peers, "chk") };
+          cy: sum(peers, "cy"), py: sum(peers, "py"), bud: sum(peers, "bud"),
+          g: guestPeriod === "ytd" ? null : sum(peers, "g"), chk: guestPeriod === "ytd" ? null : sum(peers, "chk") };
       }).sort((a, b) => b.cy - a.cy);
       const draws = [];
       for (const kind of ["stores", "cities"]) {
         const id = kind === "stores" ? "report-brand-store-map" : "report-brand-city-map";
         const mapState = brandMapState[kind], entries = root.AlfaSalesMap.pointsInView(kind === "stores" ? points : cities, mapState.view);
+        if (guestPeriod === "ytd" && ["guests", "checks"].includes(mapState.metric)) mapState.metric = "revenue";
         $(id).innerHTML = `<div class="ceo-graph-view"><div class="report-map-controls"><div class="segment" role="group" aria-label="${kind} map metric">${[["revenue", "Revenue"], ["checks", "Checks"], ["guests", "Guests"], ["budget", "Budget attainment"]].map(([value, label]) => `<button type="button" data-brand-map-metric="${value}" aria-pressed="${value === mapState.metric}">${label}</button>`).join("")}</div>${kind === "stores" ? `<div class="segment" role="group" aria-label="Brand map area">${[["ksa", "Saudi"], ["riyadh", "Riyadh"], ["jeddah", "Jeddah"], ["eastern", "Eastern"]].map(([value, label]) => `<button type="button" data-brand-map-view="${value}" aria-pressed="${value === mapState.view}">${label}</button>`).join("")}</div>` : ""}</div><p class="ceo-chart-note">Alfred mall/district coordinates. Guests/checks are source estimates; YTD uses MTD counts. City coordinates are the average of their branch positions.</p><div class="report-sales-map" id="${id}-canvas"></div><div class="report-map-legend" id="${id}-legend"></div><label class="field">Inspect ${kind === "stores" ? "branch" : "city"}<select id="${id}-inspect"><option value="">Select ${kind === "stores" ? "a branch" : "a city"}</option>${entries.map((point, index) => `<option value="${index}">${escape(point.name)}</option>`).join("")}</select></label><p id="${id}-detail" role="status">${entries.length} ${kind} in scope.</p></div><div id="${id}-table"></div>`;
         table(`${id}-table`, [kind === "stores" ? "Store" : "City", "Stores", "Sales", "Last year", "Budget attainment", `Estimated ${guestPeriod.toUpperCase()} guests`, `Estimated ${guestPeriod.toUpperCase()} checks`],
-          entries.map((point) => [point.name, point.n, money(point.cy), money(point.py), share(point.cy, point.bud), point.g, point.chk]));
-        const describe = (point) => `${escape(point.name)} · ${point.n} ${point.n === 1 ? "store" : "stores"}<br>Sales ${money(point.cy)} · ${percentage(growth(point.cy, point.py))} vs LY<br>Budget ${share(point.cy, point.bud)} · estimated ${guestPeriod.toUpperCase()} guests ${point.g.toLocaleString("en-GB")} · checks ${point.chk.toLocaleString("en-GB")}`;
+          entries.map((point) => [point.name, point.n, money(point.cy), money(point.py), share(point.cy, point.bud), count(point.g), count(point.chk)]));
+        $(id).querySelector(".ceo-chart-note").textContent = "Alfred mall/district coordinates; city positions average their branches. Guests/checks are source estimates for the selected period; YTD counts are unavailable.";
+        $(id).querySelectorAll('[data-brand-map-metric="guests"],[data-brand-map-metric="checks"]').forEach(button => {
+          button.disabled = guestPeriod === "ytd";
+          button.title = button.disabled ? "YTD traffic is not provided by Alfred" : "";
+        });
+        const describe = (point) => `${escape(point.name)} · ${point.n} ${point.n === 1 ? "store" : "stores"}<br>Sales ${money(point.cy)} · ${percentage(growth(point.cy, point.py))} vs LY<br>Budget ${share(point.cy, point.bud)} · estimated ${guestPeriod.toUpperCase()} guests ${count(point.g)} · checks ${count(point.chk)}`;
         $(`${id}-canvas`).insertAdjacentHTML("beforebegin", `<p class="ceo-chart-note" role="status">${escape(mapProvider === "offline" ? "Offline source map selected." : googleMapError || (googleMaps ? "Google heatmap · heat intensity is relative to this scope. Small pins open exact details." : "Google Maps is loading or requires maps-config.js setup. Use the Sales map provider control to select offline maps."))} ${root.AlfaMapsConfig?.mapId ? "Configured cloud map style." : "Monochrome cloud style pending: set mapId in maps-config.js after publishing the style."}</p>`);
         const draw = () => {
           const host = $(`${id}-canvas`);
@@ -1160,7 +1217,11 @@
     function renderStoreTraffic(rs) {
       chartInstances.get("report-store-traffic-chart")?.destroy();
       chartInstances.delete("report-store-traffic-chart");
-      const period = state.period === "ytd" ? "mtd" : state.period;
+      const period = state.period;
+      if (period === "ytd") {
+        unavailable("report-store-traffic", "YTD guests and spend per guest are not provided by Alfred. Monthly values are not substituted.");
+        return;
+      }
       const eligible = rs.map((branch) => ({ branch, ...alfredStoreMetrics(branch, period) })).filter((row) => row.trafficEligible);
       const visible = eligible.filter((row) => Math.abs(row.guestGrowth) < 90 && Math.abs(row.spendGrowth) < 90);
       $("report-store-traffic").innerHTML = `<div class="ceo-graph-view"><p class="ceo-chart-note">${escape(period.toUpperCase())} source traffic: right = more guests; up = higher spend/guest. ${eligible.length - visible.length} eligible outliers at ±90% or beyond are excluded from the graph, matching Alfred; all eligible stores remain in Table View.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll source store traffic chart"><div style="position:relative;height:360px;min-width:420px"><canvas id="report-store-traffic-chart" tabindex="0" role="img" aria-label="Source guest growth versus spend per guest growth"></canvas></div></div><p id="report-store-traffic-chart-detail" role="status">Hover a bubble or use arrow keys to inspect source figures. Click a bubble or press Enter to open its store detail.</p></div><div id="report-store-traffic-chart-table"></div>`;
@@ -1267,7 +1328,7 @@
       });
       chartInstances.set("report-adjustment-chart", chart);
     }
-    const alfredNotice = () => `<div class="notice"><strong>Source: Alfred October report.</strong> These values and mall/district coordinates come from Alfred's 94-branch source, not the validated 96-reporting-unit revenue source. Hybrid and Asian Dining groups are not allocated to individual brands. Unmatched brand selections show N/A. Selected period and filters apply; reported financial KPIs are unchanged.</div>`;
+    const alfredNotice = () => `<div class="notice"><strong>Source: Alfred October report.</strong> All financial figures and mall/district coordinates use the same 94-branch source. Hybrid and Asian Dining remain combined brands. Selected period and filters apply unless a panel explicitly states a fixed timeline or sample period.</div>`;
     function renderSalesBudget() {
       const branches = alfredBranches();
       const rows = [...new Set(branches.map((branch) => branch.brand))].map((brand) => {
@@ -1340,11 +1401,12 @@
       if (!root.AlfaSalesMap) throw new Error("Alfred sales map renderer is not loaded.");
       mapObserver.disconnect();
       const branches = alfredBranches();
-      const guestPeriod = state.period === "dtd" ? "dtd" : "mtd";
+      const guestPeriod = state.period;
+      if (guestPeriod === "ytd" && mapMetric === "guests") mapMetric = "revenue";
       const points = root.AlfaSalesMap.pointsInView(branches.map((branch) => ({
         name: branch.name, brand: branch.brand, lat: branch.lat, lng: branch.lng,
         cy: branch[state.period].cy, py: branch[state.period].py, bud: branch[state.period].bud,
-        g: branch.guests[guestPeriod][0], chk: branch.checks[guestPeriod][0],
+        g: guestPeriod === "ytd" ? null : branch.guests[guestPeriod][0], chk: guestPeriod === "ytd" ? null : branch.checks[guestPeriod][0],
       })), mapView);
       $("report-map").innerHTML = `${alfredNotice()}<div class="ceo-graph-view"><div class="report-map-controls"><div class="segment" role="group" aria-label="Sales map metric">${[["revenue", "Revenue"], ["growth", "Growth vs LY"], ["budget", "Budget attainment"], ["guests", "Guests"]].map(([value, label]) => `<button type="button" data-map-metric="${value}" aria-pressed="${mapMetric === value}">${label}</button>`).join("")}</div><div class="segment" role="group" aria-label="Sales map area">${[["ksa", "Saudi"], ["riyadh", "Riyadh"], ["jeddah", "Jeddah"], ["eastern", "Eastern"]].map(([value, label]) => `<button type="button" data-map-view="${value}" aria-pressed="${mapView === value}">${label}</button>`).join("")}</div></div><p class="ceo-chart-note">Heat = concentration of sales or guests. Dot color = growth or budget attainment. Guest/check counts are estimates in the Alfred source; YTD uses its MTD guest/check counts, not YTD counts.</p><div class="report-sales-map" id="report-sales-map-canvas"></div><div class="report-map-legend" id="report-sales-map-legend"></div><label class="field">Inspect branch<select id="report-map-branch"><option value="">Select a branch</option>${points.map((point, index) => `<option value="${index}">${escape(point.name)}</option>`).join("")}</select></label><p id="report-map-detail" role="status">${points.length} source branches in scope.</p></div><div id="report-sales-map-table"></div>`;
       table("report-sales-map-table", ["Branch", "Brand", "Region", "Sales", "Last year", "Budget", "Growth vs LY", "Budget attainment"],
@@ -1353,6 +1415,8 @@
       $("report-map").querySelector(".report-map-controls").nextElementSibling.textContent = mapProvider === "google"
         ? "Interactive heatmap: warmer areas show higher sales or estimated guest concentration. Small pins open branch details. Growth/budget views show performance-colored pins, not additive heat."
         : "Offline source map: heat shows concentration of sales or guests; dot color shows growth or budget attainment.";
+      $("report-map").querySelector('[data-map-metric="guests"]').disabled = guestPeriod === "ytd";
+      if (guestPeriod === "ytd") $("report-map").querySelector(".report-map-controls").nextElementSibling.textContent += " YTD guests/checks are unavailable; monthly counts are not substituted.";
       const configuredKey = typeof root.AlfaMapsConfig?.apiKey === "string" ? root.AlfaMapsConfig.apiKey.trim() : "";
       if (!root.AlfaMapsConfig?.mapId) $("report-map").querySelector(".report-map-controls").nextElementSibling.textContent += " Monochrome cloud style pending: configure a styled mapId in maps-config.js.";
       const setupMessage = "Set apiKey in the untracked maps-config.js file beside index.html, then reload. Google Maps connects automatically.";
@@ -1382,7 +1446,7 @@
           fail(error);
         }
       };
-      const describe = (point) => `${escape(point.name)} · ${escape(point.brand)}<br>Sales ${money(point.cy)} · ${percentage(growth(point.cy, point.py))} vs LY<br>Budget ${share(point.cy, point.bud)} · estimated ${guestPeriod.toUpperCase()} guests ${point.g.toLocaleString("en-GB")} · checks ${point.chk.toLocaleString("en-GB")}`;
+      const describe = (point) => `${escape(point.name)} · ${escape(point.brand)}<br>Sales ${money(point.cy)} · ${percentage(growth(point.cy, point.py))} vs LY<br>Budget ${share(point.cy, point.bud)} · estimated ${guestPeriod.toUpperCase()} guests ${count(point.g)} · checks ${count(point.chk)}`;
       drawSalesMap = () => {
         const host = $("report-sales-map-canvas");
         if (!host.checkVisibility()) return;
@@ -1450,7 +1514,6 @@
       if (!base.categories.includes(menuCategory)) menuCategory = "all";
       $("report-menu-category").innerHTML = `<option value="all">All categories</option>${base.categories.map((name) => `<option${menuCategory === name ? " selected" : ""}>${escape(name)}</option>`).join("")}`;
       const metrics = alfredMenuMetrics(source, { brand, category: menuCategory, query: menuQuery });
-      renderMissingMenu(unsupported || !base.rows.length);
       const coverage = source.storesOct.filter((store) => store[1] >= 300);
       const sourceOpen = $("report-menu-source").querySelector("details")?.open || false;
       $("report-menu-source").innerHTML = `<details class="notice report-methodology"${sourceOpen ? " open" : ""}><summary>Alfred e-invoice sample · 1–27 October · simulated recipe costs · source and filter notes</summary><div class="report-methodology-body">${escape(source.source)}. October 1–27 covers ${source.checks.oct.toLocaleString("en-GB")} checks; ${coverage.length} stores have at least 300 checks. No FireGrill stores are covered. Actual sample quantities, sales and per-1,000-check rates are preserved; these are not company totals. Recipe costs and contribution margins are simulated. Item shares and attachment use the full sample denominator, not a filtered denominator. Fixed October/September/LY comparisons do not follow the global period. Global brand and local focus intersect; Hybrid is not split into Steak House/Piatto. Region and same-store allocations are unavailable: those selections show no menu results rather than unrelated company values. Attachment remains explicitly full-sample when brand/category/search change.</div></details>`;
@@ -1494,13 +1557,13 @@
       table("report-menu-attachment-table", ["Category", "Oct 2026", "Sep 2026", "Oct 2025"], metrics.attachments.map(([name, value]) => [name, percentage(value.oct), percentage(value.sep), percentage(value.ly)]));
       brandChart("report-menu-pairs-chart", metrics.pairs.map((pair) => `${pair.brand} · ${pair.a} + ${pair.b}`), [{ label: "Checks together", data: metrics.pairs.map((pair) => pair.n) }], { horizontal: true, count: true });
       table("report-menu-pairs-table", ["Item", "Bought with", "Brand", "Checks", "% of first item", "Lift"], metrics.pairs.map((pair) => [pair.a, pair.b, pair.brand, pair.n, percentage(pair.pct), pair.lift]));
-      const priorCheck = (row) => row.ly?.avg ?? Math.round(row.oct.avg * 0.95 * 100) / 100;
-      brandChart("report-menu-spend-chart", metrics.spend.map((row) => row.ly ? row.name : `${row.name} (LY mock)`), [
+      const priorCheck = (row) => row.ly?.avg ?? null;
+      brandChart("report-menu-spend-chart", metrics.spend.map((row) => row.name), [
         { label: "Oct 2026", data: metrics.spend.map((row) => row.oct.avg) },
-        { label: "Oct 2025 (mock where labeled)", data: metrics.spend.map(priorCheck) },
+        { label: "Oct 2025 (where available)", data: metrics.spend.map(priorCheck) },
         { label: "Sep 2026", data: metrics.spend.map((row) => row.sep?.avg ?? null) },
       ]);
-      table("report-menu-spend-table", ["Store type", "Checks Oct", "Average check Oct", "Sep", "Oct 2025", "Items / check", "Basis"], metrics.spend.map((row) => [row.name, row.oct.checks.toLocaleString("en-GB"), money(row.oct.avg), money(row.sep?.avg ?? null), money(priorCheck(row)), row.oct.items, row.ly ? "Alfred sample" : "LY mock: 95% of October average check"]));
+      table("report-menu-spend-table", ["Store type", "Checks Oct", "Average check Oct", "Sep", "Oct 2025", "Items / check", "Basis"], metrics.spend.map((row) => [row.name, row.oct.checks.toLocaleString("en-GB"), money(row.oct.avg), money(row.sep?.avg ?? null), money(priorCheck(row)), row.oct.items, row.ly ? "Alfred sample" : "Alfred sample; LY unavailable"]));
       table("report-menu-engineering-table", ["Item", "Brand", "Per 1k checks", "Price", "Simulated unit cost", "Simulated contribution / item", "Class"], metrics.engineering.map((item) => [item.item, item.brand, item.per1k.oct, money(item.price), money(item.cost), money(item.margin), item.classification]));
       if (!metrics.engineering.length) {
         unavailable("report-menu-engineering-chart", "no eligible sample items match the selected filters.");
@@ -1548,44 +1611,29 @@
       }
       compactNotices();
     }
-    function renderMissingMenu(show) {
-      const host = $("report-menu-mock");
-      host.closest("article").hidden = !show;
-      chartInstances.get("report-menu-mock-chart")?.destroy();
-      chartInstances.delete("report-menu-mock-chart");
-      if (!show) { host.replaceChildren(); return; }
-      const rows = filtered().filter((row) => menuFocus === "all" || row.brand === menuFocus);
-      const categories = [...new Set(menuTemplates.map((item) => item.category))];
-      const items = illustrativeMenu(rows).filter((item) => (mockMenuCategory === "all" || item.category === mockMenuCategory) && item.name.toLowerCase().includes(menuQuery.toLowerCase()));
-      host.innerHTML = `<div class="notice">MOCK MENU PREVIEW — missing source coverage only. Selected period and global scope apply. Generic item sales are allocated, not imported. Source panels remain empty for unsupported scopes.</div><label class="field">MOCK CATEGORY<select id="report-menu-mock-category"><option value="all">All mock categories</option>${categories.map((name) => `<option${mockMenuCategory === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><div class="ceo-graph-view" id="report-menu-mock-chart"></div><div id="report-menu-mock-table"></div>`;
-      $("report-menu-mock-category").onchange = (event) => { mockMenuCategory = event.target.value; renderMissingMenu(true); navigate(state.page); };
-      const top = items.toSorted((a, b) => b.cy - a.cy).slice(0, 15);
-      brandChart("report-menu-mock-chart", top.map((item) => `${item.brand} · ${item.name}`), [{ label: "Mock current sales", data: top.map((item) => item.cy) }, { label: "Mock LY sales", data: top.map((item) => item.ly) }], { horizontal: true });
-      table("report-menu-mock-table", ["Brand", "Illustrative item", "Category", "Allocated CY sales", "Allocated LY sales", "Mock units", "Mock cost", "Mock contribution"], items.map((item) => [item.brand, item.name, item.category, money(item.cy), money(item.ly), item.units.toLocaleString("en-GB"), money(item.unitCost), money(item.profit)]));
-    }
     function render() {
       const rs = filtered();
       const amount = totals(rs);
       const same = totals(rs.filter((row) => row.sss));
       const brands = group(rs, "brand");
-      $("scope-note").textContent = `${{ dtd: "27 Oct 2026 vs 28 Oct 2025", mtd: "1–27 Oct 2026 vs source MTD 2025", ytd: "1 Jan–27 Oct 2026 vs source YTD 2025" }[state.period]} · ${rs.length} reporting units · source same-store flags · closed/converted stores excluded`;
-      const traffic = illustrativeTrafficSummary(rs);
+      $("scope-note").textContent = `${{ dtd: "27 Oct 2026 vs 28 Oct 2025", mtd: "1–27 Oct 2026 vs source MTD 2025", ytd: "1 Jan–27 Oct 2026 vs source YTD 2025" }[state.period]} · ${rs.length} Alfred branches · source same-store flags`;
+      const checks = state.period === "ytd" || !rs.length ? null : sum(rs, "checks");
       kpis("report-overview-kpis", [
         ["Total Same Store", percentage(growth(same.cy, same.ly)), `Sales ${money(same.cy)} · difference ${money(same.cy - same.ly)}`],
         ["Total ALFA / selected scope", percentage(growth(amount.cy, amount.ly)), `Sales ${money(amount.cy)} · difference ${money(amount.cy - amount.ly)}`],
         ["Budget", money(amount.budget), "From source comparison sheet"],
         ["Budget variance", money(amount.budget === null ? null : amount.cy - amount.budget), "Current sales minus source budget"],
-        ["Transactions", rs.length ? traffic.transactions.toLocaleString("en-GB") : "N/A", "Illustrative · selected period and filters"],
-        ["Average check", money(traffic.check), "Illustrative · positive sales / assumed transactions"],
+        ["Transactions (estimated)", checks === null ? "N/A" : checks.toLocaleString("en-GB"), state.period === "ytd" ? "YTD checks are unavailable in Alfred" : "Alfred source checks · selected period and filters"],
+        ["Average check", money(checks > 0 ? amount.cy / checks : null), "Alfred sales / source estimated checks"],
       ]);
       const mix = [
-        { label: "Dine-in & takeaway (combined)", current: amount.nonDelivery, prior: amount.nonDeliveryLy },
+        { label: "Alfred dine-in", current: amount.nonDelivery, prior: amount.nonDeliveryLy },
         { label: "Reported delivery", current: amount.delivery, prior: amount.deliveryLy },
       ];
       table("report-channel-table", ["Channel", "Sales", "% of total revenue"], rs.length ? [
         ...mix.map((row) => [row.label, money(row.current), share(row.current, amount.cy)]),
         ["Total", money(amount.cy), share(amount.cy, amount.cy)],
-        ["Separate dine-in", "N/A", "N/A"], ["Separate takeout", "N/A", "N/A"],
+        ["Separate takeout", "N/A", "N/A"],
       ] : []);
       const financial = brands.map((row) => financeRecord(row.name, row));
       const sameBrands = group(rs.filter((row) => row.sss), "brand").map((row) => financeRecord(`${row.name} · same-store`, row));
@@ -1593,21 +1641,8 @@
       table("report-brand-penetration", penetrationHeaders, brands.map((row) => penetrationRecord(row.name, row)));
       renderStoreTables(rs);
       renderMenu();
-      const showChannels = state.period === "mtd" && state.region === "all" && state.brand === "all" && state.basis === "all";
-      if (showChannels) {
-        const pickup = data.channels.filter((row) => /pickup/i.test(row.label)).reduce((n, row) => n + row.current, 0);
-        const deliveryOnly = data.deliveryTotal.cy - pickup;
-        table("report-vendor-table", ["Order type", "This year", "Last year", "% of source delivery/pickup pool"], [
-          ...data.channels.map((row) => [row.label, money(row.current), money(row.prior), share(row.current, data.deliveryTotal.cy)]),
-          ["Total source pool (includes pickup)", money(data.deliveryTotal.cy), money(data.deliveryTotal.ly), "100.0%"],
-          ["Delivered only (excludes pickup)", money(deliveryOnly), "See source order types", share(deliveryOnly, data.deliveryTotal.cy)],
-        ]);
-        const alfred = alfredDeliveryMetrics(root.AlfaOctoberDaily.delivery);
-        $("report-delivery-reconciliation").textContent = `Source definitions: Alfred October delivery is ${money(alfred.mtd)} versus validated order-type revenue ${money(data.deliveryTotal.cy)}: difference ${money(alfred.mtd - data.deliveryTotal.cy)}. Alfred virtual-brand totals use their own source coverage and are not added to physical-brand totals. Validated current-year order types reconcile to reported delivery. Pickup is ${money(pickup)}; delivered-only sales are ${money(deliveryOnly)} (${share(deliveryOnly, amount.cy)} of company revenue). Prior-year order-type total is ${money(data.deliveryTotal.ly)}, versus ${money(data.periods.mtd.summary.deliveryLy)} in the revenue workbook: difference ${money(data.deliveryTotal.ly - data.periods.mtd.summary.deliveryLy)}. These source definitions are not interchangeable; no amounts are rescaled.`;
-      } else {
-        unavailable("report-vendor-table", "a matched order-type breakdown is not loaded for this scope.");
-        $("report-delivery-reconciliation").textContent = "Alfred panels above remain fixed company-wide January–October / October MTD, like the reference page; global filters apply only to the validated revenue-category and penetration tables. Validated order types are available for unfiltered company MTD only. No filtered allocation is substituted. Alfred and validated delivery definitions are not interchangeable; pickup is identified in the validated order-type table.";
-      }
+      unavailable("report-vendor-table", "Alfred does not provide a matched delivery/pickup order-type breakdown.");
+      $("report-delivery-reconciliation").textContent = "All values come from Alfred. Aggregator sales, commissions and virtual brands retain Alfred's fixed company-wide Jan–Oct / October MTD coverage. Branch delivery penetration follows the selected period and filters. Different source coverages are not added, rescaled or allocated.";
       renderOctoberDaily();
       renderSalesBudget();
       renderSalesMap();
@@ -1645,5 +1680,5 @@
     }
     return { render, navigate };
   }
-  root.AlfaReportView = { create, illustrativeBrandTrend, illustrativeTraffic, illustrativeTrafficSummary, illustrativeMenu, illustrativeSeatHour, illustrativeAdjustments, alfredMetrics, alfredStoreMetrics, alfredDeliveryMetrics, alfredMenuMetrics, alfredBriefMetrics, presentationGaps };
+  root.AlfaReportView = { create, alfredReportData, alfredPeriodLabel, illustrativeBrandTrend, illustrativeTraffic, illustrativeTrafficSummary, illustrativeMenu, illustrativeSeatHour, illustrativeAdjustments, alfredMetrics, alfredStoreMetrics, alfredDeliveryMetrics, alfredMenuMetrics, alfredBriefMetrics, presentationGaps };
 })(typeof window === "undefined" ? globalThis : window);
