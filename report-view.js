@@ -391,24 +391,47 @@
           "report-brand-manager", "report-alfred-brand-sales", "report-alfred-brand-budget", "report-brand-gap",
           "report-brand-contribution", "report-brand-store-map", "report-brand-city-map", "report-map",
           "report-store-scope", "report-store-traffic", "report-brand-penetration", "report-store-penetration"], alfredPeriodLabel(state.period)],
-        [["report-october-daily", "report-overview-brand-daily", "report-alfred-brand-daily",
-          "report-source-store-daily", "report-brief-weekdays"], "Fixed October daily series · 1–27 Oct 2026"],
-        [["report-brand-month", "report-source-store-month", "report-alfred-delivery-vendors",
-          "report-alfred-delivery-share"], "Fixed Jan–Oct timeline · October through 27 Oct"],
-        [["report-brief-comparisons", "report-brand-comparisons", "report-source-store-comparisons",
-          "report-source-store-detail", "report-source-store-watch"], "Fixed source comparisons · Yesterday / MTD / YTD"],
-        [["report-brand-new", "report-source-store-peers", "report-source-store-economics",
-          "report-alfred-delivery-commission", "report-alfred-delivery-brands"], "Fixed October MTD source · not the global period"],
+        [["report-october-daily", "report-brief-weekdays", "report-overview-brand-daily"], "Fixed October daily series · 1–27 Oct 2026"],
+        [["report-alfred-brand-daily", "report-source-store-daily",
+          "report-brand-month", "report-source-store-month"], `${alfredPeriodLabel(state.period)} · ${state.period === "dtd" ? "DUMMY hourly distribution; actual totals" : "source time profile reconciled to actual totals"}`],
+        [["report-alfred-delivery-vendors", "report-alfred-delivery-share",
+          "report-alfred-delivery-commission", "report-alfred-delivery-brands"], `${alfredPeriodLabel(state.period)} · includes DUMMY breakdowns; see source note`],
+        [["report-brief-comparisons"], "Fixed source comparisons · Yesterday / MTD / YTD"],
+        [["report-brand-comparisons", "report-source-store-comparisons"], `${alfredPeriodLabel(state.period)} heatmap; table retains labeled historical comparisons`],
+        [["report-brand-new", "report-source-store-peers", "report-source-store-detail",
+          "report-source-store-watch"], alfredPeriodLabel(state.period)],
+        [["report-source-store-economics"], "Fixed October MTD annualization · simulated inputs"],
         [["report-menu-top", "report-menu-engineering", "report-menu-movers", "report-menu-attachment",
-          "report-menu-pairs", "report-menu-spend", "report-menu-table"], "Fixed October e-invoice sample · not the global period"],
-        [["report-brief-holidays", "report-brand-holidays", "report-source-store-holidays"], "Fixed 2026 / 2025 holiday totals"],
+          "report-menu-pairs", "report-menu-spend", "report-menu-table"], `${alfredPeriodLabel(state.period)} · ${state.period === "mtd" ? "source sample; simulated recipe costs" : "DUMMY missing breakdowns"}`],
+        [["report-brief-holidays"], "Fixed 2026 / 2025 holiday totals"],
+        [["report-brand-holidays", "report-source-store-holidays"], alfredPeriodLabel(state.period)],
       ];
       for (const [ids, label] of scopes) for (const id of ids) {
         const article = $(id)?.closest("article.card");
         const heading = article?.querySelector("h2");
         if (!heading) continue;
         if (!heading.dataset.sourceTitle) heading.dataset.sourceTitle = heading.textContent;
-        heading.textContent = `${heading.dataset.sourceTitle} — ${label}`;
+        const dynamic = !label.startsWith("Fixed");
+        const title = dynamic ? heading.dataset.sourceTitle
+          .replace(/October daily sales|Month by month|Daily sales[^—]*?(?=$|—)/gi, "Sales trend")
+          .replace(/— (?:October MTD|Oct MTD vs LY)|— 2026/gi, "")
+          .replace(/— October sample/gi, "— selected sample")
+          .replace(/Biggest movers — month on month/gi, "Biggest movers — vs September reference")
+          .replace(/Ramadan & Eid by brand/, "Selected-period sales by brand")
+          .replace(/Ramadan & Eid — selected store/, "Selected-period channel sales")
+          : heading.dataset.sourceTitle;
+        heading.textContent = `${title} — ${label}`;
+        const note = article.querySelector(":scope > .ceo-chart-note");
+        if (note && dynamic) {
+          if (id.startsWith("report-alfred-delivery")) note.textContent =
+            root.AlfaPeriodData.delivery(root.AlfaOctoberDaily.delivery, state.period, root.AlfaOctoberDaily.branches).periodNote;
+          else if (["report-brand-month", "report-source-store-month", "report-source-store-daily", "report-alfred-brand-daily"].includes(id)) note.textContent =
+            `${label}. Totals reconcile to selected-period source revenue; missing interval/budget distributions are allocations, not additional actuals.`;
+          else if (id === "report-brand-holidays" || id === "report-source-store-holidays") note.textContent =
+            "Actual selected-period revenue and LY comparisons. The former fixed holiday chart has been replaced by a period-aware sales comparison.";
+          else if (id === "report-source-store-peers") note.textContent = "Trading peers in the selected store scope, ranked by selected-period source sales.";
+          else if (id === "report-source-store-watch") note.textContent = "Historical MTD/YTD watchlist membership; the graph shows the selected-period growth and budget variance.";
+        }
       }
       document.querySelectorAll(".report-page div.notice:not([id])").forEach((notice) => {
         const details = document.createElement("details");
@@ -534,7 +557,7 @@
     document.querySelectorAll("body *").forEach((el) => {
       if (el.children.length === 0 && el.textContent.trim() === "SAMPLE DATA") el.textContent = "ALFRED SOURCE DATA";
     });
-    document.querySelector("main.content > footer").textContent = "Source: Alfred report, as of 27 Oct 2026. All financial figures, branch coordinates, daily/monthly series, Menu and Delivery samples come from Alfred. Not a live feed. Alfred guests/checks and commissions are estimates; store economics and recipe costs are simulated in the source. Missing YTD traffic, POS adjustments and trading-hour data show N/A. Fixed-period samples are labeled separately from the selected period.";
+    document.querySelector("main.content > footer").textContent = "Source: Alfred snapshot, 27 Oct 2026; not a live feed. Selected-period financial totals remain actual source figures. Missing hourly/menu/delivery breakdowns and YTD traffic graphs use explicitly labeled deterministic DUMMY projections. Maps retain unavailable source YTD traffic. Recipe costs, store economics and commissions remain estimates. Do not treat dummy figures as actual POS results.";
     $("overview").querySelector(".notice").textContent = "Alfred source · 27 Oct 2026 · 94 branches. CEO, Brands and Stores use the same branch figures and source same-store flags. Hybrid and Asian Dining remain combined source brands. Transactions use Alfred's estimated checks; YTD checks are unavailable. No validated JSON totals or additional mock figures are substituted.";
     $("brand").replaceChildren(new Option("All brands", "all"), ...[...new Set(data.periods.mtd.stores.map((row) => row.brand))].sort().map((name) => new Option(name, name)));
     $("region").replaceChildren(new Option("All regions", "all"), ...[...new Set(data.periods.mtd.stores.map((row) => row.region))].sort().map((name) => new Option(name, name)));
@@ -608,8 +631,8 @@
       renderSourceStoreDetail(branches);
       brandPanel("report-source-store-watch");
       brandChart("report-source-store-watch-chart", watches.map((row) => row.branch.name), [
-        { label: "MTD vs LY", data: watches.map((row) => row.mtdGrowth) },
-        { label: "YTD vs LY", data: watches.map((row) => row.ytdGrowth) },
+        { label: "Selected period vs LY", data: watches.map((row) => growth(row.branch[state.period].cy, row.branch[state.period].py)) },
+        { label: "Selected period vs budget", data: watches.map((row) => growth(row.branch[state.period].cy, row.branch[state.period].bud)) },
       ], { percent: true, horizontal: true });
       table("report-source-store-watch-table", ["Store", "Brand", "MTD", "MTD vs LY", "YTD vs LY", "Budget attainment", "Reason"], watches.map((row) => [
         row.branch.name, row.branch.brand, money(row.mtd), percentage(row.mtdGrowth), percentage(row.ytdGrowth), percentage(row.attainment),
@@ -646,38 +669,39 @@
         ids.forEach((id) => { unavailable(`${id}-chart`, "select a matching store."); unavailable(`${id}-table`, "select a matching store."); });
         return;
       }
-      const metrics = alfredStoreMetrics(branch, "mtd");
-      const peers = root.AlfaOctoberDaily.branches.filter((other) => other.brand === branch.brand && other.mtd.cy > 0).toSorted((a, b) => b.mtd.cy - a.mtd.cy);
+      const period = state.period;
+      const metrics = alfredStoreMetrics(branch, period);
+      const trend = root.AlfaPeriodData.trend([branch], period);
+      const peers = branches.filter((other) => other.brand === branch.brand && other[period].cy > 0).toSorted((a, b) => b[period].cy - a[period].cy);
       const rank = peers.indexOf(branch);
-      $("report-source-store-subtitle").textContent = `${branch.brand} · ${branch.city} · ${branch.region}${branch.opened ? ` · opened ${branch.opened}` : ""}${branch.new ? " · new store" : ""}${metrics.watch ? " · watchlist" : ""}. Detail always uses the stated October / YTD periods.`;
+      $("report-source-store-subtitle").textContent = `${branch.brand} · ${branch.city} · ${branch.region}${branch.opened ? ` · opened ${branch.opened}` : ""}${branch.new ? " · new store" : ""}${metrics.watch ? " · watchlist" : ""}. ${trend.note}.`;
       kpis("report-source-store-kpis", [
         ["Yesterday", money(metrics.yesterday), `${percentage(metrics.yesterdayVsWeek)} vs last Tuesday · ${percentage(metrics.yesterdayVsLy)} vs LY`],
         ["Last 7 days", money(metrics.lastWeek), `${percentage(metrics.wow)} WoW`],
-        ["Month to date", money(branch.mtd.cy), `${percentage(metrics.mtdGrowth)} vs LY · ${percentage(metrics.mom)} MoM/day`],
-        ["Budget MTD", percentage(metrics.attainment), `Gap ${money(branch.mtd.cy - branch.mtd.bud)}`],
+        ["Selected-period sales", money(branch[period].cy), `${percentage(metrics.growth)} vs LY · ${alfredPeriodLabel(period)}`],
+        ["Selected-period budget", percentage(metrics.attainment), `Gap ${money(branch[period].cy - branch[period].bud)}`],
         ["Year to date", money(branch.ytd.cy), `${percentage(metrics.ytdGrowth)} vs LY`],
         ["Guests MTD (estimated)", branch.guests.mtd[0].toLocaleString("en-GB"), `${percentage(metrics.guestGrowth)} vs LY`],
         ["Spend per guest MTD", money(metrics.spend), "Source sales / estimated guests; not average check"],
         ["Rank in source brand", rank >= 0 ? `${rank + 1} / ${peers.length}` : "N/A", `${percentage(metrics.deliveryShare)} MTD delivery share · trading peers only`],
       ]);
-      const lastWeek = branch.daily.cy.map((_, i) => i >= 7 ? branch.daily.cy[i - 7] : null);
-      brandChart("report-source-store-daily-chart", root.AlfaOctoberDaily.days, [
-        { label: "This year", data: branch.daily.cy },
-        { label: "Same weekday last week", data: lastWeek, borderColor: chartColors.budget, borderDash: [2, 3] },
-        { label: "Last year", data: branch.daily.py, borderColor: chartColors.prior, borderDash: [4, 3] },
+      brandChart("report-source-store-daily-chart", trend.labels, [
+        { label: "This year", data: trend.cy },
+        { label: "Budget", data: trend.bud, borderColor: chartColors.budget, borderDash: [2, 3] },
+        { label: "Last year", data: trend.py, borderColor: chartColors.prior, borderDash: [4, 3] },
       ], { line: true });
-      table("report-source-store-daily-table", ["October day", "This year", "Same weekday last week", "Last year"], root.AlfaOctoberDaily.days.map((day, i) => [day, money(branch.daily.cy[i]), money(lastWeek[i]), money(branch.daily.py[i])]));
-      brandChart("report-source-store-month-chart", root.AlfaOctoberDaily.months, [
-        { label: "This year", data: branch.month.cy }, { label: "Last year", data: branch.month.py },
-        { label: "Budget", type: "line", data: branch.month.bud },
+      table("report-source-store-daily-table", ["Interval", "This year", "Budget", "Last year"], trend.labels.map((day, i) => [day, money(trend.cy[i]), money(trend.bud[i]), money(trend.py[i])]));
+      brandChart("report-source-store-month-chart", trend.labels, [
+        { label: "This year", data: trend.cy }, { label: "Last year", data: trend.py },
+        { label: "Budget", type: "line", data: trend.bud },
       ]);
-      table("report-source-store-month-table", ["Month", "This year", "Last year", "Budget"], root.AlfaOctoberDaily.months.map((month, i) => [month, money(branch.month.cy[i]), money(branch.month.py[i]), money(branch.month.bud[i])]));
+      table("report-source-store-month-table", ["Interval", "This year", "Last year", "Budget"], trend.labels.map((month, i) => [month, money(trend.cy[i]), money(trend.py[i]), money(trend.bud[i])]));
       const topPeers = peers.slice(0, 12);
       if (!topPeers.includes(branch)) topPeers.push(branch);
       brandChart("report-source-store-peers-chart", topPeers.map((other) => other.name), [
-        { label: "MTD sales", data: topPeers.map((other) => other.mtd.cy), backgroundColor: topPeers.map((other) => other === branch ? chartColors.budget : chartColors.current) },
+        { label: alfredPeriodLabel(period), data: topPeers.map((other) => other[period].cy), backgroundColor: topPeers.map((other) => other === branch ? chartColors.budget : chartColors.current) },
       ], { horizontal: true });
-      table("report-source-store-peers-table", ["Store", "MTD", "MTD vs LY", "Budget attainment", "Spend / guest MTD"], topPeers.map((other) => [other.name, money(other.mtd.cy), percentage(growth(other.mtd.cy, other.mtd.py)), share(other.mtd.cy, other.mtd.bud), money(other.guests.mtd[0] > 0 ? other.mtd.cy / other.guests.mtd[0] : null)]));
+      table("report-source-store-peers-table", ["Store", "Selected sales", "vs LY", "Budget attainment"], topPeers.map((other) => [other.name, money(other[period].cy), percentage(growth(other[period].cy, other[period].py)), share(other[period].cy, other[period].bud)]));
       const econCards = [
         ["Store size", `${branch.sim.sqft.toLocaleString("en-GB")} sq ft`, `${branch.sim.seats} simulated seats · ${branch.sim.tables} simulated tables`],
         ["Annual rent", money(branch.sim.rentYear), "Alfred simulated rent / year"],
@@ -690,12 +714,11 @@
       $("report-source-store-economics-chart").innerHTML = '<div class="kpis" id="report-source-store-econ-kpis"></div>';
       kpis("report-source-store-econ-kpis", econCards);
       table("report-source-store-economics-table", ["Metric", "Value", "Basis"], econCards);
-      const holidays = [["Ramadan", ...branch.hol.ramadan], ["Eid al-Fitr", ...branch.hol.eidFitr]];
+      const holidays = [["Dine-in", branch[period].dcy, branch[period].dpy], ["Delivery", branch[period].vcy, branch[period].vpy]];
       brandChart("report-source-store-holidays-chart", holidays.map((row) => row[0]), [
         { label: "2026", data: holidays.map((row) => row[1]) }, { label: "2025", data: holidays.map((row) => row[2]) },
       ]);
-      table("report-source-store-holidays-table", ["Holiday", "2026", "2025", "Change", "Basis"], holidays.map(([name, cy, py]) => [name, money(cy), money(py), percentage(growth(cy, py)), name.includes("mock") ? "Mock: 90% of source Eid al-Fitr" : "Alfred event totals"]));
-      if (!branch.hol.ramadan.some(value => value > 0)) $("report-source-store-holidays").insertAdjacentHTML("beforeend", '<p class="ceo-chart-note">Not open in Ramadan in the Alfred sample; no Ramadan comparison available.</p>');
+      table("report-source-store-holidays-table", ["Channel", "2026", "2025", "Change", "Basis"], holidays.map(([name, cy, py]) => [name, money(cy), money(py), percentage(growth(cy, py)), alfredPeriodLabel(period)]));
       if (state.period === "ytd") {
         $("report-source-store-kpis").insertAdjacentHTML("beforeend", '<article class="kpi"><div class="kpi-top">Guests YTD</div><div class="kpi-value">N/A</div><div class="kpi-bottom">Not provided by Alfred</div></article><article class="kpi"><div class="kpi-top">Spend / guest YTD</div><div class="kpi-value">N/A</div><div class="kpi-bottom">Not provided by Alfred</div></article>');
       }
@@ -871,7 +894,7 @@
       })).sort((a, b) => b.cy - a.cy);
       const amount = alfredMetrics(branches, state.period);
       const allRows = rows.length ? [...rows, { name: "ALFA total / selected scope", ...amount }] : [];
-      $("report-brand-manager").innerHTML = `${alfredNotice()}<label class="field">ALFRED BRAND FOCUS<select id="report-brand-focus"><option value="all">All brands in selected scope</option>${[...new Set(source.branches.map((branch) => branch.brand))].sort().map((name) => `<option${brandFocus === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><p class="ceo-chart-note">Scorecard and rule-based commentary use only the Alfred presentation sample; no live AI analysis or additional mock figures. Focus narrows the global brand/region/store-basis selection. Hybrid = SH + Piatto physical sites counted once; standalone brands exclude those sites. All panels below use this same source scope. Daily/monthly/holiday comparisons have their stated fixed periods.</p><div class="kpis" id="report-brand-manager-kpis"></div><p id="report-brand-manager-notes"></p>`;
+      $("report-brand-manager").innerHTML = `${alfredNotice()}<label class="field">ALFRED BRAND FOCUS<select id="report-brand-focus"><option value="all">All brands in selected scope</option>${[...new Set(source.branches.map((branch) => branch.brand))].sort().map((name) => `<option${brandFocus === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><p class="ceo-chart-note">Graphs follow Yesterday, MTD or YTD and this source scope. Actual source sales and budgets are unchanged; missing hourly profiles are labeled DUMMY. Focus narrows the global brand/region/store-basis selection. Hybrid = SH + Piatto physical sites counted once. Historical comparison tables keep their labeled dates; no live AI analysis.</p><div class="kpis" id="report-brand-manager-kpis"></div><p id="report-brand-manager-notes"></p>`;
       $("report-brand-focus").onchange = (event) => { brandFocus = event.target.value; renderAlfredBrands(); compactNotices(); navigate(state.page); };
       const active = branches.filter((branch) => branch[state.period].cy > 0);
       const ranked = active.filter((branch) => branch[state.period].py > 0).sort((a, b) => growth(b[state.period].cy, b[state.period].py) - growth(a[state.period].cy, a[state.period].py));
@@ -944,46 +967,58 @@
       }
       table("report-brand-gap-table", ["Store", "Brand", "Sales", "Budget", "Budget gap", "Share of scope budget"], gaps.map((branch, i) => [branch.name, branch.brand, money(branch[state.period].cy), money(branch[state.period].bud), money(gapValues[i]), share(branch[state.period].bud, amount.budget)]));
       const newStores = branches.filter((branch) => branch.new).sort((a, b) => b.opened.localeCompare(a.opened));
-      brandChart("report-brand-new-chart", newStores.map((branch) => branch.name), [{ label: "MTD sales", data: newStores.map((branch) => branch.mtd.cy) }]);
-      table("report-brand-new-table", ["Store", "Brand", "Opened", "Months", "MTD", "Sales / day", "vs mature average", "Budget attainment"], newStores.map((branch) => {
-        const mature = source.branches.filter((other) => other.brand === branch.brand && !other.new && other.sss && other.mtd.cy > 0);
-        const average = mature.length ? mature.reduce((total, other) => total + other.mtd.cy, 0) / mature.length / 27 : null;
-        return [branch.name, branch.brand, branch.opened, Math.round((new Date(source.asOf) - new Date(branch.opened)) / 2.63e9), money(branch.mtd.cy), money(branch.mtd.cy / 27), average > 0 ? percentage(branch.mtd.cy / 27 / average * 100) : "N/A", share(branch.mtd.cy, branch.mtd.bud)];
+      brandChart("report-brand-new-chart", newStores.map((branch) => branch.name), [{ label: alfredPeriodLabel(state.period), data: newStores.map((branch) => branch[state.period].cy) }]);
+      const selectedDays = root.AlfaPeriodData.days[state.period];
+      table("report-brand-new-table", ["Store", "Brand", "Opened", "Months", "Selected sales", "Sales / day", "vs mature average", "Budget attainment"], newStores.map((branch) => {
+        const mature = source.branches.filter((other) => other.brand === branch.brand && !other.new && other.sss && other[state.period].cy > 0);
+        const average = mature.length ? mature.reduce((total, other) => total + other[state.period].cy, 0) / mature.length / selectedDays : null;
+        return [branch.name, branch.brand, branch.opened, Math.round((new Date(source.asOf) - new Date(branch.opened)) / 2.63e9), money(branch[state.period].cy), money(branch[state.period].cy / selectedDays), average > 0 ? percentage(branch[state.period].cy / selectedDays / average * 100) : "N/A", share(branch[state.period].cy, branch[state.period].bud)];
       }));
-      const newSales = newStores.reduce((n, branch) => n + branch.mtd.cy, 0);
+      const newSales = newStores.reduce((n, branch) => n + branch[state.period].cy, 0);
       const existing = branches.filter(branch => !branch.new);
-      $("report-brand-new").insertAdjacentHTML("beforeend", `<p class="ceo-chart-note">${newStores.length ? `New stores add ${money(newSales)} MTD, ${share(newSales, amount.mtd)} of scope sales. Without them, the scope is ${percentage(growth(existing.reduce((n, branch) => n + branch.mtd.cy, 0), existing.reduce((n, branch) => n + branch.mtd.py, 0)))} vs LY. Ramp uses all-region source mature peers, not this filtered scope.` : "No new stores in this selection."}</p>`);
-      brandChart("report-brand-month-chart", branches.length ? source.months : [], [
-        { label: "This year", data: amount.monthly.cy }, { label: "Last year", data: amount.monthly.py },
-        { label: "Budget", type: "line", data: amount.monthly.budget },
+      $("report-brand-new").insertAdjacentHTML("beforeend", `<p class="ceo-chart-note">${newStores.length ? `New stores add ${money(newSales)} in ${alfredPeriodLabel(state.period)}, ${share(newSales, amount.cy)} of scope sales. Without them, the scope is ${percentage(growth(existing.reduce((n, branch) => n + branch[state.period].cy, 0), existing.reduce((n, branch) => n + branch[state.period].py, 0)))} vs LY. Ramp uses all-region source mature peers, not this filtered scope.` : "No new stores in this selection."}</p>`);
+      const trend = root.AlfaPeriodData.trend(branches, state.period);
+      brandChart("report-brand-month-chart", branches.length ? trend.labels : [], [
+        { label: "This year", data: trend.cy }, { label: "Last year", data: trend.py },
+        { label: "Budget", type: "line", data: trend.bud },
       ]);
-      table("report-brand-month-table", ["Month", "This year", "Last year", "Budget"], branches.length ? source.months.map((month, i) => [month, money(amount.monthly.cy[i]), money(amount.monthly.py[i]), money(amount.monthly.budget[i])]) : []);
-      const holidayLabels = rows.flatMap((row) => [`${row.name} · Ramadan`, `${row.name} · Eid al-Fitr`]);
+      table("report-brand-month-table", ["Interval", "This year", "Last year", "Budget"], branches.length ? trend.labels.map((month, i) => [month, money(trend.cy[i]), money(trend.py[i]), money(trend.bud[i])]) : []);
+      const holidayLabels = rows.map((row) => row.name);
       brandChart("report-brand-holidays-chart", holidayLabels, [
-        { label: "2026", data: rows.flatMap((row) => [row.holidays.ramadan[0], row.holidays.eidFitr[0]]) },
-        { label: "2025", data: rows.flatMap((row) => [row.holidays.ramadan[1], row.holidays.eidFitr[1]]) },
+        { label: "2026", data: rows.map((row) => row.cy) },
+        { label: "2025", data: rows.map((row) => row.ly) },
       ]);
-      table("report-brand-holidays-table", ["Brand", "Ramadan 2026", "Ramadan 2025", "Ramadan change", "Eid 2026", "Eid 2025", "Eid change"], allRows.map((row) => [row.name, ...row.holidays.ramadan.map(money), percentage(growth(...row.holidays.ramadan)), ...row.holidays.eidFitr.map(money), percentage(growth(...row.holidays.eidFitr))]));
+      table("report-brand-holidays-table", ["Brand", "Selected 2026", "Selected 2025", "vs LY"], allRows.map((row) => [row.name, money(row.cy), money(row.ly), percentage(row.growth)]));
       renderBrandDaily("report-alfred-brand-daily", rows);
       renderBrandMaps(branches);
     }
     function renderBrandDaily(hostId, rows) {
-      const source = root.AlfaOctoberDaily;
       const prefix = `${hostId}-series-`;
       for (const [id, chart] of chartInstances) if (id.startsWith(prefix)) { chart.destroy(); chartInstances.delete(id); }
       $(hostId).innerHTML = `<div class="ceo-grid" id="${hostId}-grid"></div>`;
       if (!rows.length) $(`${hostId}-grid`).innerHTML = '<div class="empty">No Alfred brands match the selected filters.</div>';
       rows.forEach((row, i) => {
         const id = `${prefix}${i}`;
-        $(`${hostId}-grid`).insertAdjacentHTML("beforeend", card(`${row.name} · October daily sales`, id));
+        const branches = alfredBranches().filter((branch) => branch.brand === row.name && (hostId !== "report-alfred-brand-daily" || brandFocus === "all" || branch.brand === brandFocus));
+        const trend = hostId === "report-overview-brand-daily"
+          ? { labels: root.AlfaOctoberDaily.days, cy: row.daily.cy, py: row.daily.py, note: "Fixed October source sample" }
+          : root.AlfaPeriodData.trend(branches, state.period);
+        $(`${hostId}-grid`).insertAdjacentHTML("beforeend", card(`${row.name} · ${trend.note}`, id));
         brandPanel(id);
-        brandChart(`${id}-chart`, source.days, [{ label: "This year", data: row.daily.cy }, { label: "Last year", data: row.daily.py, borderDash: [4, 3] }], { line: true });
-        table(`${id}-table`, ["October day", "This year", "Last year"], source.days.map((day, index) => [day, money(row.daily.cy[index]), money(row.daily.py[index])]));
+        brandChart(`${id}-chart`, trend.labels, [{ label: "This year", data: trend.cy }, { label: "Last year", data: trend.py, borderDash: [4, 3] }], { line: true });
+        table(`${id}-table`, ["Interval", "This year", "Last year"], trend.labels.map((day, index) => [day, money(trend.cy[index]), money(trend.py[index])]));
       });
     }
     function renderComparisonHeat(id, rows, total = true) {
-      const keys = ["yesterdayVsWeek", "yesterdayVsLy", "wow", "mom", "mtdGrowth", "ytdGrowth", "mtdBudgetGrowth"];
-      const labels = ["Yesterday vs week", "Yesterday vs LY", "WoW", "MoM / day", "MTD vs LY", "YTD vs LY", "MTD vs budget"];
+      rows = rows.map((row) => {
+        const values = row.branch ? alfredStoreMetrics(row.branch, state.period) : row;
+        return { ...row, ...values, budgetGap: values.attainment === null ? null : values.attainment - 100 };
+      });
+      const fixed = id === "report-brief-heat";
+      const keys = fixed ? ["yesterdayVsWeek", "yesterdayVsLy", "wow", "mom", "mtdGrowth", "ytdGrowth", "mtdBudgetGrowth"]
+        : ["growth", "budgetGap", "sameGrowth", "deliveryShare", "guestGrowth", "spendGrowth", "attainment"];
+      const labels = fixed ? ["Yesterday vs week", "Yesterday vs LY", "WoW", "MoM / day", "MTD vs LY", "YTD vs LY", "MTD vs budget"]
+        : ["Selected vs LY", "Selected vs budget", "Same-store vs LY", "Delivery share", "Guest growth (est.)", "Spend growth", "Budget attained"];
       $(id).innerHTML = rows.length
         ? `<div class="report-heat-grid" role="group" aria-label="Comparison heatmap; exact figures also in Table View."><div class="report-heat-row report-heat-header" aria-hidden="true"><strong>${total ? "Brand" : "Store"}</strong>${labels.map(label => `<strong>${label}</strong>`).join("")}</div>${rows.map((row, index) => `<div class="report-heat-row${total && index === rows.length - 1 ? " report-heat-total" : ""}"><strong>${escape(row.name)}</strong>${keys.map((key, i) => `<div class="report-heat-cell ${row[key] === null ? "" : row[key] >= 0 ? "report-heat-up" : "report-heat-down"}" aria-label="${escape(row.name)} · ${labels[i]}: ${percentage(row[key])}"><b>${percentage(row[key])}</b></div>`).join("")}</div>`).join("")}</div>`
         : '<div class="empty">No source comparisons in scope.</div>';
@@ -1218,13 +1253,18 @@
       chartInstances.get("report-store-traffic-chart")?.destroy();
       chartInstances.delete("report-store-traffic-chart");
       const period = state.period;
-      if (period === "ytd") {
-        unavailable("report-store-traffic", "YTD guests and spend per guest are not provided by Alfred. Monthly values are not substituted.");
-        return;
-      }
-      const eligible = rs.map((branch) => ({ branch, ...alfredStoreMetrics(branch, period) })).filter((row) => row.trafficEligible);
+      const eligible = rs.map((branch) => {
+        if (period !== "ytd") return { branch, ...alfredStoreMetrics(branch, period) };
+        const guests = root.AlfaPeriodData.traffic(branch, period).guests;
+        const guestGrowth = guests[1] > 0 ? (guests[0] / guests[1] - 1) * 100 : null;
+        const spend = guests[0] > 0 ? branch.ytd.cy / guests[0] : null;
+        const spendLy = guests[1] > 0 ? branch.ytd.py / guests[1] : null;
+        return { branch, ...alfredStoreMetrics(branch, period), guestGrowth, spend,
+          spendGrowth: spendLy > 0 ? (spend / spendLy - 1) * 100 : null,
+          trafficEligible: branch.sss && !branch.new && guests[0] > 0 && guests[1] > 0 };
+      }).filter((row) => row.trafficEligible);
       const visible = eligible.filter((row) => Math.abs(row.guestGrowth) < 90 && Math.abs(row.spendGrowth) < 90);
-      $("report-store-traffic").innerHTML = `<div class="ceo-graph-view"><p class="ceo-chart-note">${escape(period.toUpperCase())} source traffic: right = more guests; up = higher spend/guest. ${eligible.length - visible.length} eligible outliers at ±90% or beyond are excluded from the graph, matching Alfred; all eligible stores remain in Table View.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll source store traffic chart"><div style="position:relative;height:360px;min-width:420px"><canvas id="report-store-traffic-chart" tabindex="0" role="img" aria-label="Source guest growth versus spend per guest growth"></canvas></div></div><p id="report-store-traffic-chart-detail" role="status">Hover a bubble or use arrow keys to inspect source figures. Click a bubble or press Enter to open its store detail.</p></div><div id="report-store-traffic-chart-table"></div>`;
+      $("report-store-traffic").innerHTML = `<div class="ceo-graph-view"><p class="ceo-chart-note">${escape(period.toUpperCase())} ${period === "ytd" ? "DUMMY traffic: YTD revenue / October spend-per-guest assumption" : "source estimated traffic"}: right = more guests; up = higher spend/guest. ${eligible.length - visible.length} eligible outliers at ±90% or beyond are excluded from the graph, matching Alfred; all eligible stores remain in Table View.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll source store traffic chart"><div style="position:relative;height:360px;min-width:420px"><canvas id="report-store-traffic-chart" tabindex="0" role="img" aria-label="Guest growth versus spend per guest growth"></canvas></div></div><p id="report-store-traffic-chart-detail" role="status">Hover a bubble or use arrow keys to inspect figures. Click a bubble or press Enter to open its store detail.</p></div><div id="report-store-traffic-chart-table"></div>`;
       table("report-store-traffic-chart-table", ["Store", "Brand", "Guest growth", "Spend / guest growth", "Sales", "Growth vs LY"], eligible.map((row) => [row.branch.name, row.branch.brand, percentage(row.guestGrowth), percentage(row.spendGrowth), money(row.cy), percentage(row.growth)]));
       if (!visible.length) {
         $("report-store-traffic-chart").parentElement.innerHTML = '<div class="empty">No source stores qualify for the traffic graph.</div>';
@@ -1348,19 +1388,21 @@
       }], { percent: true, horizontal: true, target: true });
     }
     function renderAlfredDelivery() {
-      const source = root.AlfaOctoberDaily.delivery;
+      const source = root.AlfaPeriodData.delivery(root.AlfaOctoberDaily.delivery, state.period, root.AlfaOctoberDaily.branches);
       const metrics = alfredDeliveryMetrics(source);
-      const last = metrics.last;
-      const biggest = metrics.biggest;
+      const sales = (vendor) => vendor.sales.reduce((a, b) => a + b, 0);
+      const commission = (vendor) => vendor.commission.reduce((a, b) => a + b, 0);
+      const biggest = metrics.vendors.filter((vendor) => vendor.name !== "Sufra app (online)").toSorted((a, b) => sales(b) - sales(a))[0];
+      const total = metrics.ytd, fee = metrics.commissionYtd;
+      const app = metrics.vendors.find((vendor) => vendor.name === "Sufra app (online)");
       kpis("report-delivery-kpis", [
-        ["Delivery sales Oct MTD", money(metrics.mtd), `${percentage(metrics.shares[last])} of source net sales · company`],
-        ["Delivery YTD", money(metrics.ytd), `${percentage(metrics.ytdShare)} of source net sales · Jan–27 Oct`],
-        ["Commission Oct (est.)", money(metrics.commissionMtd), "Source contract rates · VAT basis unconfirmed"],
-        ["Commission YTD (est.)", money(metrics.commissionYtd), "January–October source monthly sales × rates"],
-        ["Sufra app share", percentage(metrics.appShare), "Of October delivery · source 0% commission"],
-        ["Biggest aggregator", biggest?.name || "N/A", biggest ? `${share(biggest.sales[last], metrics.mtd)} of October delivery · ${(biggest.rate * 100).toFixed(0)}% rate` : "No aggregator sales"],
-        ["Net delivery revenue", money(metrics.netMtd), "October sales less estimated commission only"],
-        ["Reporting scope", "Company", "Fixed Jan–Oct / Oct MTD · global filters not applied"],
+        ["Delivery sales", money(total), alfredPeriodLabel(state.period)],
+        ["Delivery share", percentage(metrics.ytdShare), "Selected-period delivery / company net sales"],
+        ["Commission (est.)", money(fee), "Selected vendor sales × source rates; VAT basis unconfirmed"],
+        ["Sufra app share", share(app ? sales(app) : 0, total), "Selected period · source 0% commission"],
+        ["Biggest aggregator", biggest?.name || "N/A", biggest ? `${share(sales(biggest), total)} of selected-period delivery` : "No aggregator sales"],
+        ["Net delivery revenue", money(total - fee), "Selected-period sales less estimated commission"],
+        ["Reporting scope", "Company", source.periodNote],
       ]);
       ["report-alfred-delivery-vendors", "report-alfred-delivery-share", "report-alfred-delivery-commission", "report-alfred-delivery-brands"].forEach(brandPanel);
       const main = ["Keeta", "Hunger Station", "Jahez"];
@@ -1381,20 +1423,20 @@
       brandChart("report-alfred-delivery-share-chart", source.months, [{ label: "Delivery share", data: metrics.shares }], { line: true, percent: true });
       table("report-alfred-delivery-share-table", ["Month", "Delivery sales", "Total net sales", "Delivery share"], source.months.map((month, i) =>
         [month, money(metrics.totals[i]), money(source.netSales[i]), percentage(metrics.shares[i])]));
-      const vendors = metrics.vendors.toSorted((a, b) => b.commission[last] - a.commission[last]);
-      const paid = vendors.filter((vendor) => vendor.commission[last] > 0);
+      const vendors = metrics.vendors.toSorted((a, b) => commission(b) - commission(a));
+      const paid = vendors.filter((vendor) => commission(vendor) > 0);
       brandChart("report-alfred-delivery-commission-chart", paid.map((vendor) => `${vendor.name} (${(vendor.rate * 100).toFixed(0)}%)`), [
-        { label: "Estimated October commission", data: paid.map((vendor) => vendor.commission[last]), backgroundColor: "#ed4654" },
+        { label: `${alfredPeriodLabel(state.period)} commission`, data: paid.map(commission), backgroundColor: "#ed4654" },
       ], { horizontal: true });
-      table("report-alfred-delivery-commission-table", ["Vendor", "October sales", "Contract rate", "October commission (est.)", "YTD commission (est.)"], [
-        ...vendors.map((vendor) => [vendor.name, money(vendor.sales[last]), percentage(vendor.rate * 100), money(vendor.commission[last]), money(vendor.commission.reduce((a, b) => a + b, 0))]),
-        ["Total", money(metrics.mtd), "Vendor-specific", money(metrics.commissionMtd), money(metrics.commissionYtd)],
+      table("report-alfred-delivery-commission-table", ["Vendor", "Selected sales", "Contract rate", "Selected commission (est.)"], [
+        ...vendors.map((vendor) => [vendor.name, money(sales(vendor)), percentage(vendor.rate * 100), money(commission(vendor))]),
+        ["Total", money(total), "Vendor-specific", money(fee)],
       ]);
       brandChart("report-alfred-delivery-brands-chart", source.brandsMtd.map((row) => row.brand), [
-        { label: "Oct 2026", data: source.brandsMtd.map((row) => row.cy) },
-        { label: "Oct 2025", data: source.brandsMtd.map((row) => row.py) },
+        { label: alfredPeriodLabel(state.period), data: source.brandsMtd.map((row) => row.cy) },
+        { label: state.period === "mtd" ? "MTD LY" : "DUMMY selected-period LY", data: source.brandsMtd.map((row) => row.py) },
       ], { horizontal: true });
-      table("report-alfred-delivery-brands-table", ["Brand", "Oct 2026", "Oct 2025", "Growth vs LY"], source.brandsMtd.map((row) =>
+      table("report-alfred-delivery-brands-table", ["Brand", "Selected CY", state.period === "mtd" ? "Selected LY" : "DUMMY selected LY", "Growth vs LY"], source.brandsMtd.map((row) =>
         [row.brand, money(row.cy), money(row.py), percentage(growth(row.cy, row.py))]));
     }
     function renderSalesMap() {
@@ -1507,7 +1549,7 @@
       if (mapProvider === "google" && configuredKey && !googleMapAttempted) void connectGoogleMap();
     }
     function renderMenu() {
-      const source = root.AlfaOctoberDaily.menu;
+      const source = root.AlfaPeriodData.menu(root.AlfaOctoberDaily.menu, state.period, root.AlfaOctoberDaily.branches);
       const brand = state.brand === "all" ? menuFocus : state.brand;
       const unsupported = state.region !== "all" || state.basis !== "all" || state.brand !== "all" && menuFocus !== "all" && menuFocus !== state.brand;
       const base = alfredMenuMetrics(source, { brand });
@@ -1516,7 +1558,7 @@
       const metrics = alfredMenuMetrics(source, { brand, category: menuCategory, query: menuQuery });
       const coverage = source.storesOct.filter((store) => store[1] >= 300);
       const sourceOpen = $("report-menu-source").querySelector("details")?.open || false;
-      $("report-menu-source").innerHTML = `<details class="notice report-methodology"${sourceOpen ? " open" : ""}><summary>Alfred e-invoice sample · 1–27 October · simulated recipe costs · source and filter notes</summary><div class="report-methodology-body">${escape(source.source)}. October 1–27 covers ${source.checks.oct.toLocaleString("en-GB")} checks; ${coverage.length} stores have at least 300 checks. No FireGrill stores are covered. Actual sample quantities, sales and per-1,000-check rates are preserved; these are not company totals. Recipe costs and contribution margins are simulated. Item shares and attachment use the full sample denominator, not a filtered denominator. Fixed October/September/LY comparisons do not follow the global period. Global brand and local focus intersect; Hybrid is not split into Steak House/Piatto. Region and same-store allocations are unavailable: those selections show no menu results rather than unrelated company values. Attachment remains explicitly full-sample when brand/category/search change.</div></details>`;
+      $("report-menu-source").innerHTML = `<details class="notice report-methodology"${sourceOpen ? " open" : ""}><summary>${escape(source.periodNote)}</summary><div class="report-methodology-body">${escape(source.source)}. Selected sample: ${source.checks.oct.toLocaleString("en-GB")} checks. ${state.period === "mtd" ? `${coverage.length} stores have at least 300 checks; actual sample quantities and sales are preserved.` : "Missing totals, attachment, pairs and check values are deterministic DUMMY projections; they are not actual POS totals."} No FireGrill stores are covered. Recipe costs are simulated. September and October LY remain explicitly labeled reference baselines for rates/check averages, not selected-period totals. Global brand and local focus intersect; Hybrid is not split. Region and same-store allocations are unavailable and show no results. Attachment uses the full sample denominator.</div></details>`;
       ["report-menu-top", "report-menu-engineering", "report-menu-movers", "report-menu-attachment", "report-menu-pairs", "report-menu-spend"].forEach((id) => {
         chartInstances.get(`${id}-chart`)?.destroy();
         chartInstances.delete(`${id}-chart`);
@@ -1534,36 +1576,36 @@
       }
       const check = metrics.spend.length === 1 ? metrics.spend[0] : null;
       kpis("report-menu-kpis", [
-        ["Checks in sample — Oct", source.checks.oct.toLocaleString("en-GB"), `Full sample · Sep ${source.checks.sep.toLocaleString("en-GB")} · LY ${source.checks.ly.toLocaleString("en-GB")}`],
+        ["Checks in selected sample", source.checks.oct.toLocaleString("en-GB"), source.periodNote],
         ["Average check", money(check?.oct.avg ?? null), check ? `${check.name} · ${percentage(growth(check.oct.avg, check.sep?.avg))} vs Sep` : "Select one covered source brand"],
         ["Items per check", check ? String(check.oct.items) : "N/A", check?.sep ? `September ${check.sep.items}` : "Select one covered source brand"],
         ["Dessert attachment", percentage(source.attach.Desserts.oct), `Full sample · Sep ${source.attach.Desserts.sep}% · LY ${source.attach.Desserts.ly}%`],
         ["Drinks attachment", percentage(source.attach["Soft drinks"].oct + source.attach["Juices & mocktails"].oct), "Full sample · soft drinks + juices; overlap possible"],
       ]);
       const labels = (items) => items.map((item) => `${item.brand} · ${item.item}`);
-      brandChart("report-menu-top-chart", metrics.top.map((item) => `${item.item} (${item.rankChange > 0 ? "+" : ""}${item.rankChange})`), [{ label: "October sample sales", data: metrics.top.map((item) => item.sales) }], { horizontal: true });
+      brandChart("report-menu-top-chart", metrics.top.map((item) => `${item.item} (${item.rankChange > 0 ? "+" : ""}${item.rankChange})`), [{ label: `${alfredPeriodLabel(state.period)} sample sales${state.period === "mtd" ? "" : " (DUMMY)"}`, data: metrics.top.map((item) => item.sales) }], { horizontal: true });
       table("report-menu-top-table", ["Item", "Brand", "Category", "Sales", "Sold", "Sample share", "Per 1k checks", "Rank change vs Sep"],
         metrics.top.map((item) => [item.item, item.brand, item.cat, money(item.sales), item.qty.toLocaleString("en-GB"), percentage(item.share * 100), item.per1k.oct, item.rankChange]));
-      table("report-menu-table", ["Item", "Brand", "Category", "Price", "Sold", "Sales", "Sample share", "Per 1k checks", "DoD", "WoW", "MoM", "YoY", "Class"],
+      table("report-menu-table", ["Item", "Brand", "Category", "Price", "Sold", "Sales", "Sample share", "Per 1k checks", "Source DoD", "Source WoW", "vs Sep reference", "vs Oct LY reference", "Class"],
         metrics.rows.map((item) => [item.item, item.brand, item.cat, money(item.price), item.qty.toLocaleString("en-GB"), money(item.sales), percentage(item.share * 100), item.per1k.oct, ...["dod", "wow", "mom", "yoy"].map((key) => percentage(item[key])), item.classification || "N/A"]));
       const movers = [...metrics.rising, ...metrics.falling];
       brandChart("report-menu-movers-chart", labels(movers), [{ label: "Units per 1,000 checks change vs Sep", data: movers.map((item) => item.mom), backgroundColor: movers.map((item) => item.mom >= 0 ? "#299bb0" : "#ed4654") }], { horizontal: true, percent: true });
-      table("report-menu-movers-table", ["Item", "Brand", "September per 1k", "October per 1k", "MoM"], movers.map((item) => [item.item, item.brand, item.per1k.sep, item.per1k.oct, percentage(item.mom)]));
+      table("report-menu-movers-table", ["Item", "Brand", "September reference per 1k", "Selected per 1k", "Change vs Sep reference"], movers.map((item) => [item.item, item.brand, item.per1k.sep, item.per1k.oct, percentage(item.mom)]));
       brandChart("report-menu-attachment-chart", metrics.attachments.map(([name]) => name), [
-        { label: "Oct 2026", data: metrics.attachments.map(([, value]) => value.oct) },
-        { label: "Oct 2025", data: metrics.attachments.map(([, value]) => value.ly) },
-        { label: "Sep 2026", data: metrics.attachments.map(([, value]) => value.sep) },
+        { label: alfredPeriodLabel(state.period), data: metrics.attachments.map(([, value]) => value.oct) },
+        { label: "Oct 2025 baseline", data: metrics.attachments.map(([, value]) => value.ly) },
+        { label: "Sep 2026 baseline", data: metrics.attachments.map(([, value]) => value.sep) },
       ], { horizontal: true, percent: true });
-      table("report-menu-attachment-table", ["Category", "Oct 2026", "Sep 2026", "Oct 2025"], metrics.attachments.map(([name, value]) => [name, percentage(value.oct), percentage(value.sep), percentage(value.ly)]));
+      table("report-menu-attachment-table", ["Category", "Selected sample", "Sep 2026 baseline", "Oct 2025 baseline"], metrics.attachments.map(([name, value]) => [name, percentage(value.oct), percentage(value.sep), percentage(value.ly)]));
       brandChart("report-menu-pairs-chart", metrics.pairs.map((pair) => `${pair.brand} · ${pair.a} + ${pair.b}`), [{ label: "Checks together", data: metrics.pairs.map((pair) => pair.n) }], { horizontal: true, count: true });
       table("report-menu-pairs-table", ["Item", "Bought with", "Brand", "Checks", "% of first item", "Lift"], metrics.pairs.map((pair) => [pair.a, pair.b, pair.brand, pair.n, percentage(pair.pct), pair.lift]));
       const priorCheck = (row) => row.ly?.avg ?? null;
       brandChart("report-menu-spend-chart", metrics.spend.map((row) => row.name), [
-        { label: "Oct 2026", data: metrics.spend.map((row) => row.oct.avg) },
-        { label: "Oct 2025 (where available)", data: metrics.spend.map(priorCheck) },
-        { label: "Sep 2026", data: metrics.spend.map((row) => row.sep?.avg ?? null) },
+        { label: alfredPeriodLabel(state.period), data: metrics.spend.map((row) => row.oct.avg) },
+        { label: "Oct 2025 baseline (where available)", data: metrics.spend.map(priorCheck) },
+        { label: "Sep 2026 baseline", data: metrics.spend.map((row) => row.sep?.avg ?? null) },
       ]);
-      table("report-menu-spend-table", ["Store type", "Checks Oct", "Average check Oct", "Sep", "Oct 2025", "Items / check", "Basis"], metrics.spend.map((row) => [row.name, row.oct.checks.toLocaleString("en-GB"), money(row.oct.avg), money(row.sep?.avg ?? null), money(priorCheck(row)), row.oct.items, row.ly ? "Alfred sample" : "Alfred sample; LY unavailable"]));
+      table("report-menu-spend-table", ["Store type", "Selected checks", "Selected average check", "Sep baseline", "Oct 2025 baseline", "Items / check", "Basis"], metrics.spend.map((row) => [row.name, row.oct.checks.toLocaleString("en-GB"), money(row.oct.avg), money(row.sep?.avg ?? null), money(priorCheck(row)), row.oct.items, source.periodNote]));
       table("report-menu-engineering-table", ["Item", "Brand", "Per 1k checks", "Price", "Simulated unit cost", "Simulated contribution / item", "Class"], metrics.engineering.map((item) => [item.item, item.brand, item.per1k.oct, money(item.price), money(item.cost), money(item.margin), item.classification]));
       if (!metrics.engineering.length) {
         unavailable("report-menu-engineering-chart", "no eligible sample items match the selected filters.");
@@ -1642,7 +1684,7 @@
       renderStoreTables(rs);
       renderMenu();
       unavailable("report-vendor-table", "Alfred does not provide a matched delivery/pickup order-type breakdown.");
-      $("report-delivery-reconciliation").textContent = "All values come from Alfred. Aggregator sales, commissions and virtual brands retain Alfred's fixed company-wide Jan–Oct / October MTD coverage. Branch delivery penetration follows the selected period and filters. Different source coverages are not added, rescaled or allocated.";
+      $("report-delivery-reconciliation").textContent = root.AlfaPeriodData.delivery(root.AlfaOctoberDaily.delivery, state.period, root.AlfaOctoberDaily.branches).periodNote;
       renderOctoberDaily();
       renderSalesBudget();
       renderSalesMap();
@@ -1680,5 +1722,5 @@
     }
     return { render, navigate };
   }
-  root.AlfaReportView = { create, alfredReportData, alfredPeriodLabel, illustrativeBrandTrend, illustrativeTraffic, illustrativeTrafficSummary, illustrativeMenu, illustrativeSeatHour, illustrativeAdjustments, alfredMetrics, alfredStoreMetrics, alfredDeliveryMetrics, alfredMenuMetrics, alfredBriefMetrics, presentationGaps };
+  root.AlfaReportView = { periodGraphsVersion: 1, create, alfredReportData, alfredPeriodLabel, illustrativeBrandTrend, illustrativeTraffic, illustrativeTrafficSummary, illustrativeMenu, illustrativeSeatHour, illustrativeAdjustments, alfredMetrics, alfredStoreMetrics, alfredDeliveryMetrics, alfredMenuMetrics, alfredBriefMetrics, presentationGaps };
 })(typeof window === "undefined" ? globalThis : window);
