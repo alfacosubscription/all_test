@@ -325,5 +325,165 @@ const C = { muted: "#718096", good: "#168565", warn: "#e5b83d", serious: "#eb683
                 .join("") + "<span>of budget</span>";
         }
 
-root.AlfaSalesMap = { drawMap, legend, growthColor, budColor };
+let googleMapsRequest = null;
+function loadGoogleMaps(key, onAuthError) {
+  if (!key.trim()) return Promise.reject(new Error("Enter a restricted Google Maps browser API key."));
+  if (googleMapsRequest) return googleMapsRequest;
+  googleMapsRequest = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    const callback = "alfaGoogleMapsReady";
+    const previousAuthFailure = root.gm_authFailure;
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      delete root[callback];
+      if (error) {
+        script.remove();
+        root.gm_authFailure = previousAuthFailure;
+        googleMapsRequest = null;
+        root.gm_authFailure = previousAuthFailure;
+        reject(error);
+      } else resolve(root.google.maps);
+    };
+    root.gm_authFailure = () => {
+      const error = new Error("Google Maps authorization failed. Check API enablement, billing and HTTP-referrer restrictions.");
+      googleMapsRequest = null;
+      if (!settled) finish(error);
+      onAuthError(error);
+      if (typeof previousAuthFailure === "function") previousAuthFailure();
+    };
+    root[callback] = () => {
+      if (!root.google?.maps?.Map || !root.google?.maps?.marker?.AdvancedMarkerElement) {
+        finish(new Error("Google Maps did not provide the required map and marker libraries."));
+        return;
+      }
+      finish();
+    };
+    const timer = setTimeout(() => finish(new Error("Google Maps loading timed out. Check your connection and blocked requests.")), 20000);
+    const url = new URL("https://maps.googleapis.com/maps/api/js");
+    url.searchParams.set("key", key.trim());
+    url.searchParams.set("callback", callback);
+    url.searchParams.set("libraries", "marker");
+    url.searchParams.set("loading", "async");
+    url.searchParams.set("v", "weekly");
+    script.src = url.href;
+    script.async = true;
+    script.onerror = () => finish(new Error("Google Maps could not be loaded. Check your connection or content-security policy."));
+    document.head.append(script);
+  });
+  return googleMapsRequest;
+}
+function pointsInView(points, view) {
+  if (!VIEWS[view]) throw new Error(`Unknown map area: ${view}`);
+  if (view === "ksa") return points;
+  const [west, east, south, north] = VIEWS[view];
+  return points.filter((point) => point.lng >= west && point.lng <= east && point.lat >= south && point.lat <= north);
+}
+function createGoogleMap(element, maps) {
+  const map = new maps.Map(element, {
+    center: { lat: 23.8859, lng: 45.0792 }, zoom: 6,
+    mapId: root.AlfaMapsConfig?.mapId?.trim() || "DEMO_MAP_ID", mapTypeControl: false, streetViewControl: false,
+    fullscreenControl: true, zoomControl: true, gestureHandling: "cooperative",
+  });
+  const info = new maps.InfoWindow();
+  let markers = [], currentPoints = [], describe, onInspect;
+  let heatMetric = "revenue";
+  const heat = new maps.OverlayView();
+  let heatCanvas = null;
+  heat.onAdd = () => {
+    heatCanvas = document.createElement("canvas");
+    heatCanvas.style.position = "absolute";
+    heatCanvas.style.pointerEvents = "none";
+    heatCanvas.setAttribute("aria-hidden", "true");
+    heat.getPanes().overlayLayer.appendChild(heatCanvas);
+  };
+  heat.draw = () => {
+    if (!heatCanvas) return;
+    const bounds = map.getBounds(), projection = heat.getProjection();
+    if (!bounds || !projection) return;
+    const origin = projection.fromLatLngToDivPixel(new maps.LatLng(bounds.getNorthEast().lat(), bounds.getSouthWest().lng()));
+    const width = element.clientWidth, height = element.clientHeight;
+    heatCanvas.width = width; heatCanvas.height = height;
+    heatCanvas.style.left = `${origin.x}px`;
+    heatCanvas.style.top = `${origin.y}px`;
+    const ctx = heatCanvas.getContext("2d");
+    if (!width || !height || !["revenue", "guests", "checks"].includes(heatMetric)) return;
+    const values = currentPoints.map((point) => Math.max(0, heatMetric === "guests" ? point.g : heatMetric === "checks" ? point.chk : point.cy));
+    const max = Math.max(1, ...values), radius = 36;
+    currentPoints.forEach((point, index) => {
+      if (!values[index]) return;
+      const pixel = projection.fromLatLngToDivPixel(new maps.LatLng(point.lat, point.lng));
+      const x = pixel.x - origin.x, y = pixel.y - origin.y;
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      gradient.addColorStop(0, `rgba(0,0,0,${Math.sqrt(values[index] / max) * 0.65})`);
+      gradient.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    });
+    const image = ctx.getImageData(0, 0, width, height);
+    for (let i = 0; i < image.data.length; i += 4) {
+      const alpha = image.data[i + 3];
+      if (!alpha) continue;
+      const [r, g, b] = rampAt(alpha / 255);
+      image.data[i] = r; image.data[i + 1] = g; image.data[i + 2] = b;
+      image.data[i + 3] = Math.min(180, alpha);
+    }
+    ctx.putImageData(image, 0, 0);
+  };
+  heat.onRemove = () => { heatCanvas?.remove(); heatCanvas = null; };
+  heat.setMap(map);
+  const clear = () => {
+    info.close();
+    markers.forEach((marker) => {
+      maps.event.clearInstanceListeners(marker);
+      marker.map = null;
+    });
+    markers = [];
+  };
+  const inspect = (point) => {
+    const index = currentPoints.indexOf(point);
+    if (index < 0) return;
+    map.panTo({ lat: point.lat, lng: point.lng });
+    info.setContent(describe(point));
+    info.open({ map, anchor: markers[index] });
+    onInspect(point);
+  };
+  return {
+    element,
+    update(points, options) {
+      clear();
+      currentPoints = pointsInView(points, options.view);
+      heatMetric = options.metric;
+      describe = options.describe;
+      onInspect = options.onInspect;
+      markers = currentPoints.map((point) => {
+        const color = options.metric === "budget"
+          ? budColor(point.bud > 0 ? point.cy / point.bud : null)
+          : options.metric === "growth"
+            ? growthColor(point.py > 0 ? point.cy / point.py - 1 : null)
+            : "#299bb0";
+        const pin = new maps.marker.PinElement({
+          background: color, borderColor: "#ffffff", glyphColor: "#075577",
+          scale: 0.6,
+        });
+        const marker = new maps.marker.AdvancedMarkerElement({
+          map, position: { lat: point.lat, lng: point.lng },
+          title: `${point.name} · ${point.brand}`, content: pin.element,
+        });
+        marker.addListener("click", () => inspect(point));
+        return marker;
+      });
+      const [west, east, south, north] = VIEWS[options.view];
+      map.fitBounds({ west, east, south, north }, 24);
+      heat.draw();
+      return currentPoints;
+    },
+    inspect,
+    resize() { maps.event.trigger(map, "resize"); heat.draw(); },
+    destroy() { clear(); heat.setMap(null); maps.event.clearInstanceListeners(map); element.remove(); },
+  };
+}
+root.AlfaSalesMap = { drawMap, legend, growthColor, budColor, loadGoogleMaps, createGoogleMap, pointsInView };
 })(globalThis);
