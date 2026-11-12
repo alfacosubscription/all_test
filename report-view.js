@@ -296,8 +296,37 @@
       (state.brand === "all" || row.brand === state.brand) &&
       (state.basis === "all" || row.sss));
     const chartInstances = new Map();
+    const originalFills = new WeakMap();
+    const opaqueFill = color => {
+      if (Array.isArray(color)) return color.map(opaqueFill);
+      if (typeof color !== "string") return color;
+      if (/^#[\da-f]{8}$/i.test(color)) return color.slice(0, 7);
+      return color.replace(/^rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)$/, "rgb($1,$2,$3)");
+    };
+    Chart.register({
+      id: "report-fill-style",
+      beforeUpdate(chart) {
+        if (!chart.canvas.closest(".report-page")) return;
+        for (const dataset of chart.data.datasets) {
+          if (!originalFills.has(dataset)) originalFills.set(dataset, dataset.backgroundColor);
+          const fill = originalFills.get(dataset);
+          dataset.backgroundColor = $("report-solid-charts").checked ? opaqueFill(fill) : fill;
+        }
+      },
+    });
+    $("report-solid-charts").onchange = () => {
+      document.body.classList.toggle("report-solid-style", $("report-solid-charts").checked);
+      for (const chart of chartInstances.values()) chart.update("none");
+    };
     let mapMetric = "revenue";
     let mapView = "ksa";
+    let mapProvider = "google";
+    let googleMaps = null;
+    let googleMap = null;
+    let googleMapLoading = false;
+    let googleMapError = "";
+    let googleMapAttempted = false;
+    const googleBrandMaps = new Map();
     let drawSalesMap = () => {};
     const mapObserver = new ResizeObserver(() => drawSalesMap());
     let brandFocus = "all";
@@ -397,18 +426,16 @@
       ${card("Same-store growth — every store", "report-brief-ranking", "All comparable Alfred stores, replacing the limited Top/Worst panels. Click Inspect to open the store detail.")}
       ${card("Validated financial totals", "report-finance", "Revenue workbook figures underpin the KPIs; Alfred panels use a separately disclosed source.", "ceo-table-view")}`;
     $("brands").innerHTML = `${card("Brand manager view", "report-brand-manager")}
-      ${card("Brands — every comparison", "report-brand-comparisons", "Yesterday, weekly, monthly and year-on-year comparisons use Alfred's fixed reporting dates.", "ceo-table-view")}
+      ${card("Brands — every comparison", "report-brand-comparisons", "Yesterday, weekly, monthly and year-on-year comparisons use Alfred's fixed reporting dates. Heat cells are relative percentage changes; exact amounts appear in Table View.")}
       <div class="ceo-grid">${card("Sales by brand — this year vs last year", "report-alfred-brand-sales")}${card("Budget attainment by brand", "report-alfred-brand-budget")}</div>
-      ${card("Budget gap by store", "report-brand-gap")}
+      <div class="ceo-grid">${card("Budget gap by store", "report-brand-gap")}${card("New stores — shown separately", "report-brand-new", "Alfred new-store flags. MTD sales/day compared with the same source brand's mature same-store average across all regions; new stores are excluded from same-store growth.")}</div>
       ${card("Contribution to the change — by brand", "report-brand-contribution", "Selected-period source sales minus last year. Positive brands offset declining brands; amounts reconcile to the source scope change.")}
-      ${card("New stores — shown separately", "report-brand-new", "Alfred new-store flags. MTD sales/day compared with the same source brand's mature same-store average across all regions; new stores are excluded from same-store growth.")}
       <div class="ceo-grid">${card("Brand across its stores", "report-brand-store-map")}${card("Brand overall — by city", "report-brand-city-map")}</div>
-      ${card("Month by month — this year, last year, budget", "report-brand-month", "January–October 2026; October covers 1–27 only.")}
-      ${card("Ramadan & Eid by brand", "report-brand-holidays", "Ramadan: 18 Feb–19 Mar 2026 vs 1–29 Mar 2025. Eid al-Fitr: three days each. Mock Eid al-Adha = 90% of source Eid al-Fitr, not actual event sales.")}
+      <div class="ceo-grid">${card("Month by month — this year, last year, budget", "report-brand-month", "January–October 2026; October covers 1–27 only.")}${card("Ramadan & Eid by brand", "report-brand-holidays", "Ramadan: 18 Feb–19 Mar 2026 vs 1–29 Mar 2025. Eid al-Fitr: three days each. Mock Eid al-Adha = 90% of source Eid al-Fitr, not actual event sales.")}</div>
       ${card("Daily trend per brand — October", "report-alfred-brand-daily", "Actual source daily series, not illustrative splits. Each brand uses its own scale; dashed navy = last year.")}`;
     $("stores").innerHTML = `${card("Stores — Alfred source scope", "report-store-scope")}
       <div class="table-head report-search"><label for="report-store-search">Search stores</label><input class="search" id="report-store-search" type="search" aria-label="Search stores" placeholder="Search stores, brands or cities…"></div>
-      ${card("Stores — every comparison", "report-source-store-table", "October comparisons: Yesterday, WoW, MoM/day, MTD and YTD. Click headers to sort; use a store's Inspect button to open its detail.", "ceo-table-view")}
+      ${card("Stores — every comparison", "report-source-store-comparisons", "Fixed October comparisons, matching Alfred. Graph View shows percentage changes; Table View includes exact amounts. Click table headers to sort or a row to inspect a store.")}
       ${card("Store detail", "report-source-store-detail")}
       <div class="ceo-grid">${card("October day by day", "report-source-store-daily", "1–27 October 2026. Same weekday last week starts on day 8.")}${card("Month by month", "report-source-store-month", "January–October 2026; October covers 1–27 only.")}</div>
       ${card("Against its peers — same brand, MTD", "report-source-store-peers", "Top 12 trading peers across all Alfred regions, plus the selected store. Rank uses the full source brand, not the filtered list.")}
@@ -501,6 +528,8 @@
         return (sortAscending ? 1 : -1) * (typeof left === "number" ? left - right : left.localeCompare(right)) || a.branch.name.localeCompare(b.branch.name);
       });
       const headers = ["Store", "Brand", "City", "Basis", "Yesterday", "vs last week", "Yesterday vs LY", "WoW", "MoM / day", "MTD", "MTD vs LY", "Budget attainment", "YTD vs LY", "Guest growth MTD (est.)", "Spend / guest MTD", "Checks MTD (est.)", "Delivery MTD", "Status"];
+      $("report-source-store-comparisons").innerHTML = '<div class="ceo-graph-view report-comparison-heat" id="report-source-store-heat"></div><div id="report-source-store-table"></div>';
+      renderComparisonHeat("report-source-store-heat", sorted.map(row => ({ ...row, name: row.branch.name })), false);
       table("report-source-store-table", headers, sorted.map((row) => values(row).map((value, i) =>
         [4, 9, 14].includes(i) ? money(value) : [5, 6, 7, 8, 10, 11, 12, 13, 16].includes(i) ? percentage(value) : value)),
       { column: sortColumn, ascending: sortAscending, onSort: (column) => {
@@ -510,7 +539,8 @@
         const name = sorted[index].branch.name, button = document.createElement("button");
         button.type = "button"; button.className = "report-store-inspect"; button.textContent = "Inspect";
         button.setAttribute("aria-label", `Inspect ${name}`); tr.children[0].append(" ", button);
-        button.onclick = () => {
+        tr.style.cursor = "pointer";
+        tr.onclick = () => {
           selectedStore = name; $("report-source-store-picker").value = name; renderSourceStoreDetail(branches);
           compactNotices(); navigate(state.page);
           $("report-source-store-detail").closest("article").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -533,6 +563,19 @@
         row.branch.name, row.branch.brand, money(row.mtd), percentage(row.mtdGrowth), percentage(row.ytdGrowth), percentage(row.attainment),
         [row.branch.mtd.py > 0 && row.branch.mtd.cy < row.branch.mtd.py * 0.85 && row.branch.ytd.py > 0 && row.branch.ytd.cy < row.branch.ytd.py * 0.85 ? "Falling MTD and YTD" : "", row.branch.mtd.bud > 0 && row.branch.mtd.cy < row.branch.mtd.bud * 0.85 ? "Far below MTD budget" : ""].filter(Boolean).join("; "),
       ]));
+      $("report-source-store-watch-table").querySelectorAll("tbody tr").forEach((tr, index) => {
+        if (!watches[index]) return;
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "report-store-inspect"; button.textContent = "Inspect";
+        button.setAttribute("aria-label", `Inspect ${watches[index].branch.name}`);
+        tr.children[0].append(" ", button);
+        tr.style.cursor = "pointer";
+        tr.onclick = () => {
+          selectedStore = watches[index].branch.name; $("report-source-store-picker").value = selectedStore;
+          renderSourceStoreDetail(branches); compactNotices();
+          $("report-source-store-detail").closest("article").scrollIntoView({ block: "start" });
+        };
+      });
       if (!watches.length && branches.length) {
         $("report-source-store-watch-chart").innerHTML = '<div class="empty">No stores meet the watchlist criteria.</div>';
         $("report-source-store-watch-table").innerHTML = '<div class="empty">No stores meet the watchlist criteria.</div>';
@@ -584,6 +627,8 @@
       ], { horizontal: true });
       table("report-source-store-peers-table", ["Store", "MTD", "MTD vs LY", "Budget attainment", "Spend / guest MTD"], topPeers.map((other) => [other.name, money(other.mtd.cy), percentage(growth(other.mtd.cy, other.mtd.py)), share(other.mtd.cy, other.mtd.bud), money(other.guests.mtd[0] > 0 ? other.mtd.cy / other.guests.mtd[0] : null)]));
       const econCards = [
+        ["Store size", `${branch.sim.sqft.toLocaleString("en-GB")} sq ft`, `${branch.sim.seats} simulated seats · ${branch.sim.tables} simulated tables`],
+        ["Annual rent", money(branch.sim.rentYear), "Alfred simulated rent / year"],
         ["Annualized sales", money(metrics.annualSales), "October sales/day × 365"],
         ["Occupancy cost", percentage(metrics.occupancy), `${money(branch.sim.rentYear)} simulated annual rent`],
         ["Sales per sq ft", money(metrics.salesPerSqft), `${branch.sim.sqft} simulated sq ft · annualized`],
@@ -598,10 +643,124 @@
         { label: "2026", data: holidays.map((row) => row[1]) }, { label: "2025", data: holidays.map((row) => row[2]) },
       ]);
       table("report-source-store-holidays-table", ["Holiday", "2026", "2025", "Change", "Basis"], holidays.map(([name, cy, py]) => [name, money(cy), money(py), percentage(growth(cy, py)), name.includes("mock") ? "Mock: 90% of source Eid al-Fitr" : "Alfred event totals"]));
+      if (!branch.hol.ramadan.some(value => value > 0)) $("report-source-store-holidays").insertAdjacentHTML("beforeend", '<p class="ceo-chart-note">Not open in Ramadan in the Alfred sample; no Ramadan comparison available.</p>');
       if (state.period === "ytd") {
         const guests = illustrativeTraffic(branch.ytd.cy, branch.name).transactions;
         $("report-source-store-kpis").insertAdjacentHTML("beforeend", `<article class="kpi"><div class="kpi-top">Guests YTD · mock</div><div class="kpi-value">${guests.toLocaleString("en-GB")}</div><div class="kpi-bottom">Assumed guests from positive YTD sales; not actual traffic</div></article><article class="kpi"><div class="kpi-top">Spend / guest YTD · mock</div><div class="kpi-value">${money(guests ? Math.max(0, branch.ytd.cy) / guests : null)}</div><div class="kpi-bottom">YTD sales / assumed guests; source MTD estimates above stay unchanged</div></article>`);
       }
+    }
+    function enableChartZoom(chart) {
+      const canvas = chart.canvas;
+      const viewport = canvas.parentElement.parentElement;
+      const controls = document.createElement("div");
+      controls.className = "report-chart-zoom";
+      controls.setAttribute("role", "group");
+      controls.setAttribute("aria-label", "Chart zoom and pan");
+      const initial = Object.fromEntries(["x", "y"].map(key => [key, {
+        min: chart.options.scales[key].min, max: chart.options.scales[key].max,
+      }]));
+      const transform = (factor, dx = 0, dy = 0, anchor = { x: 0.5, y: 0.5 }) => {
+        for (const key of ["x", "y"]) {
+          const scale = chart.scales[key];
+          const logarithmic = scale.type === "logarithmic";
+          const forward = logarithmic ? Math.log : value => value;
+          const inverse = logarithmic ? Math.exp : value => value;
+          const min = forward(scale.min), max = forward(scale.max);
+          const span = max - min;
+          const center = min + span * anchor[key];
+          const shift = span * (key === "x" ? dx : dy);
+          const nextMin = inverse(center + (min - center) * factor + shift);
+          const nextMax = inverse(center + (max - center) * factor + shift);
+          if (!Number.isFinite(nextMin) || !Number.isFinite(nextMax) || nextMax <= nextMin) return;
+          chart.options.scales[key].min = nextMin;
+          chart.options.scales[key].max = nextMax;
+        }
+        chart.update("none");
+      };
+      for (const [label, title, callback] of [
+        ["Reset zoom", "Restore the complete chart", () => {
+          for (const key of ["x", "y"]) {
+            chart.options.scales[key].min = initial[key].min;
+            chart.options.scales[key].max = initial[key].max;
+          }
+          chart.update("none");
+        }],
+      ]) {
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "report-store-inspect";
+        button.textContent = label; button.title = title; button.onclick = callback;
+        controls.append(button);
+      }
+      viewport.before(controls);
+      const hint = document.createElement("p");
+      hint.className = "ceo-chart-note";
+      hint.textContent = "Scroll over the plot to zoom. Drag to pan; pinch with two fingers to zoom on touch screens. Double-click or Reset zoom restores all points. Keyboard: + / - to zoom, 0 to reset. Filters reset zoom.";
+      controls.after(hint);
+      canvas.style.touchAction = "none";
+      canvas.style.cursor = "grab";
+      const position = event => {
+        const rect = canvas.getBoundingClientRect(), area = chart.chartArea;
+        return {
+          x: ((event.clientX - rect.left) * chart.width / rect.width - area.left) / (area.right - area.left),
+          y: (area.bottom - (event.clientY - rect.top) * chart.height / rect.height) / (area.bottom - area.top),
+        };
+      };
+      canvas.addEventListener("wheel", event => {
+        if (!event.deltaY) return;
+        const anchor = position(event);
+        if (anchor.x < 0 || anchor.x > 1 || anchor.y < 0 || anchor.y > 1) return;
+        event.preventDefault();
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? chart.height : 1);
+        transform(Math.exp(Math.max(-0.3, Math.min(0.3, delta * 0.002))), 0, 0, anchor);
+      }, { passive: false });
+      const pointers = new Map();
+      let moved = false, gestureEnded = -Infinity;
+      const originalClick = chart.options.onClick;
+      chart.options.onClick = (...args) => {
+        if (!moved && performance.now() - gestureEnded > 350) originalClick?.(...args);
+      };
+      canvas.addEventListener("pointerdown", event => {
+        if (event.button !== 0) return;
+        const point = position(event);
+        if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) return;
+        if (!pointers.size) moved = false;
+        pointers.set(event.pointerId, { ...point, clientX: event.clientX, clientY: event.clientY });
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = "grabbing";
+      });
+      canvas.addEventListener("pointermove", event => {
+        if (!pointers.has(event.pointerId)) return;
+        const previous = pointers.get(event.pointerId), next = position(event);
+        if (!moved && Math.hypot(event.clientX - previous.clientX, event.clientY - previous.clientY) < 4) return;
+        moved = true;
+        const before = [...pointers.values()];
+        pointers.set(event.pointerId, { ...next, clientX: event.clientX, clientY: event.clientY });
+        const after = [...pointers.values()];
+        if (before.length === 1) {
+          transform(1, previous.x - next.x, previous.y - next.y);
+        } else if (before.length === 2) {
+          const distance = points => Math.hypot(points[0].clientX - points[1].clientX, points[0].clientY - points[1].clientY);
+          const center = points => ({ x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 });
+          const oldCenter = center(before), newCenter = center(after);
+          if (distance(after) > 0 && distance(before) > 0) transform(distance(before) / distance(after), oldCenter.x - newCenter.x, oldCenter.y - newCenter.y, newCenter);
+        }
+      });
+      const release = event => {
+        pointers.delete(event.pointerId);
+        if (moved) gestureEnded = performance.now();
+        if (!pointers.size) { moved = false; canvas.style.cursor = "grab"; }
+      };
+      canvas.addEventListener("pointerup", release);
+      canvas.addEventListener("pointercancel", release);
+      canvas.addEventListener("lostpointercapture", release);
+      const reset = () => controls.querySelector("button").click();
+      canvas.addEventListener("dblclick", reset);
+      canvas.addEventListener("keydown", event => {
+        if (!["+", "=", "-", "0"].includes(event.key)) return;
+        event.preventDefault();
+        if (event.key === "0") reset();
+        else transform(event.key === "-" ? 1.25 : 0.8);
+      });
     }
     function brandPanel(id) {
       $(id).innerHTML = `<div class="ceo-graph-view" id="${id}-chart"></div><div id="${id}-table"></div>`;
@@ -661,7 +820,7 @@
       })).sort((a, b) => b.cy - a.cy);
       const amount = alfredMetrics(branches, state.period);
       const allRows = rows.length ? [...rows, { name: "ALFA total / selected scope", ...amount }] : [];
-      $("report-brand-manager").innerHTML = `${alfredNotice()}<label class="field">ALFRED BRAND FOCUS<select id="report-brand-focus"><option value="all">All brands in selected scope</option>${[...new Set(source.branches.map((branch) => branch.brand))].sort().map((name) => `<option${brandFocus === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><p class="ceo-chart-note">Focus narrows the global brand/region/store-basis selection. Hybrid = SH + Piatto physical sites counted once; standalone brands exclude those sites. All panels below use this same source scope. Daily/monthly/holiday comparisons have their stated fixed periods.</p><div class="kpis" id="report-brand-manager-kpis"></div><p id="report-brand-manager-notes"></p>`;
+      $("report-brand-manager").innerHTML = `${alfredNotice()}<label class="field">ALFRED BRAND FOCUS<select id="report-brand-focus"><option value="all">All brands in selected scope</option>${[...new Set(source.branches.map((branch) => branch.brand))].sort().map((name) => `<option${brandFocus === name ? " selected" : ""}>${escape(name)}</option>`).join("")}</select></label><p class="ceo-chart-note">Scorecard and rule-based commentary use only the Alfred presentation sample; no live AI analysis or additional mock figures. Focus narrows the global brand/region/store-basis selection. Hybrid = SH + Piatto physical sites counted once; standalone brands exclude those sites. All panels below use this same source scope. Daily/monthly/holiday comparisons have their stated fixed periods.</p><div class="kpis" id="report-brand-manager-kpis"></div><p id="report-brand-manager-notes"></p>`;
       $("report-brand-focus").onchange = (event) => { brandFocus = event.target.value; renderAlfredBrands(); compactNotices(); navigate(state.page); };
       const active = branches.filter((branch) => branch[state.period].cy > 0);
       const ranked = active.filter((branch) => branch[state.period].py > 0).sort((a, b) => growth(b[state.period].cy, b[state.period].py) - growth(a[state.period].cy, a[state.period].py));
@@ -669,17 +828,43 @@
         ["Sales", branches.length ? money(amount.cy) : "N/A", `${amount.trading} stores trading · ${percentage(amount.growth)} vs LY`],
         ["Budget attainment", percentage(amount.attainment), `Gap ${branches.length ? money(amount.cy - amount.budget) : "N/A"}`],
         ["Same-store growth", percentage(amount.sameGrowth), `${active.filter((branch) => branch.new).length} new stores trading`],
-        ["Guest growth", percentage(state.period === "ytd" ? presentationGaps(branches, state.period).guestGrowth : amount.guestGrowth), state.period === "ytd" ? "Mock YTD · assumed CY/LY guests, not source traffic" : "Source estimates · comparable same-store guests"],
-        ["Spend per guest", money(state.period === "ytd" ? presentationGaps(branches, state.period).spend : amount.spend), state.period === "ytd" ? "Mock YTD · sales / assumed guests" : `${percentage(amount.spendGrowth)} vs LY · not average check`],
-        ["Week on week", percentage(amount.wow), "Last 7 days vs preceding 7 days · October"],
-        ["Delivery share", percentage(amount.deliveryShare), "Alfred source delivery / total revenue"],
-        ["Below 90% of budget", String(active.filter((branch) => branch[state.period].bud > 0 && branch[state.period].cy / branch[state.period].bud < 0.9).length), `Of ${active.length} stores trading`],
+        ["Guests", percentage(amount.guestGrowth), state.period === "ytd" ? "Not available in Alfred's YTD sample" : `Spend/guest ${money(amount.spend)} (${percentage(amount.spendGrowth)}) · source estimates, not average check`],
+        ["Week on week", percentage(amount.wow), `Last 7 days ${money(branches.reduce((n, branch) => n + branch.daily.cy.slice(-7).reduce((a, b) => a + b, 0), 0))} · October`],
+        ["Delivery share", percentage(amount.deliveryShare), `LY ${share(branches.reduce((n, branch) => n + branch[state.period].vpy, 0), amount.ly)} · source delivery / revenue`],
+        ["Below 90% of budget", String(active.filter((branch) => branch[state.period].bud > 0 && branch[state.period].cy / branch[state.period].bud < 0.9).length), `Of ${active.length} stores trading · ${active.filter((branch) => branch[state.period].bud > 0 && branch[state.period].cy / branch[state.period].bud < 0.9).slice(0, 2).map(branch => branch.name).join(", ")}`],
       ]);
-      if (state.period === "ytd") $("report-brand-manager-kpis").insertAdjacentHTML("beforeend", `<article class="kpi"><div class="kpi-top">Same-store guests · mock YTD</div><div class="kpi-value">${presentationGaps(branches, state.period).guests.toLocaleString("en-GB")}</div><div class="kpi-bottom">Deterministic assumed guests from positive sales; not source traffic</div></article>`);
       $("report-brand-manager-notes").textContent = ranked.length
         ? `Best store: ${ranked[0].name} (${percentage(growth(ranked[0][state.period].cy, ranked[0][state.period].py))}). Worst: ${ranked.at(-1).name} (${percentage(growth(ranked.at(-1)[state.period].cy, ranked.at(-1)[state.period].py))}).`
         : "No comparable trading stores in this selection.";
-      table("report-brand-comparisons", ["Brand", "Stores", "Yesterday", "Yesterday vs last week", "Yesterday vs LY", "WoW", "MoM / day", "MTD vs LY", "YTD vs LY", "MTD vs budget", "MTD", "Budget MTD", "Same-store MTD"],
+      const notes = [];
+      if (amount.guestGrowth !== null && amount.spendGrowth !== null) notes.push(amount.guestGrowth < amount.spendGrowth
+        ? `Guests are the problem (${percentage(amount.guestGrowth)}); spend per guest is ${percentage(amount.spendGrowth)}. Look at footfall drivers: mall traffic, marketing, waiting times.`
+        : `Spend per guest is the weaker side (${percentage(amount.spendGrowth)}). Look at menu mix, upsell and discounts.`);
+      const largestGap = active.filter(branch => branch[state.period].bud > 0).sort((a, b) => a[state.period].cy - a[state.period].bud - (b[state.period].cy - b[state.period].bud))[0];
+      if (largestGap && amount.budget > amount.cy) notes.push(`${largestGap.name} accounts for ${money(largestGap[state.period].bud - largestGap[state.period].cy)} of the ${money(amount.budget - amount.cy)} net budget gap (${share(largestGap[state.period].bud - largestGap[state.period].cy, amount.budget - amount.cy)}). Positive stores offset deficits, so a share can exceed 100%.`);
+      if (branches.length) notes.push(`Ramadan ${percentage(growth(...amount.holidays.ramadan))} vs last Ramadan; Eid al-Fitr ${percentage(growth(...amount.holidays.eidFitr))}.`);
+      const sourceBrands = [...new Set(branches.map(branch => branch.brand))];
+      const sellers = sourceBrands.length === 1 && ["Hybrid", "Steak House", "Piatto", "CFK"].includes(sourceBrands[0])
+        ? source.menu.items.filter(item => item.brand === sourceBrands[0]).slice(0, 3) : [];
+      if (sellers.length) notes.push(`Top sellers in the e-invoice sample: ${sellers.map(item => item.item).join(", ")}. See the Menu page.`);
+      $("report-brand-manager-notes").insertAdjacentHTML("afterend", `<ul class="report-brand-readout">${notes.map(note=>`<li>${escape(note)}</li>`).join("")}</ul><div id="report-brand-actions"></div>`);
+      const inspectStore = (branch) => {
+        selectedStore = branch.name; storeFocus = "all"; storeQuery = ""; $("report-store-search").value = "";
+        renderAlfredStores(); navigate("stores");
+        $("report-source-store-detail").closest("article").scrollIntoView({ block: "start" });
+      };
+      const action = (label, callback) => {
+        const button = document.createElement("button"); button.type = "button"; button.className = "report-store-inspect";
+        button.textContent = label; button.onclick = callback; $("report-brand-actions").append(button, " ");
+      };
+      if (ranked.length) {
+        action(`Inspect best: ${ranked[0].name}`, () => inspectStore(ranked[0]));
+        action(`Inspect worst: ${ranked.at(-1).name}`, () => inspectStore(ranked.at(-1)));
+      }
+      if (sellers.length) action("Explore Menu sample", () => { menuFocus = sourceBrands.length === 1 ? sourceBrands[0] : "all"; menuCategory = "all"; menuQuery = ""; $("report-menu-search").value = ""; renderMenu(); navigate("menu"); });
+      $("report-brand-comparisons").innerHTML = '<div class="ceo-graph-view report-comparison-heat" id="report-brand-comparison-heat"></div><div id="report-brand-comparison-table"></div>';
+      renderComparisonHeat("report-brand-comparison-heat", allRows);
+      table("report-brand-comparison-table", ["Brand", "Stores", "Yesterday", "Yesterday vs last week", "Yesterday vs LY", "WoW", "MoM / day", "MTD vs LY", "YTD vs LY", "MTD vs budget", "MTD", "Budget MTD", "Same-store MTD"],
         allRows.map((row) => [row.name, branches.filter((branch) => (row.name.startsWith("ALFA total") || branch.brand === row.name) && branch.mtd.cy > 0).length, money(row.yesterday),
           ...["yesterdayVsWeek", "yesterdayVsLy", "wow", "mom", "mtdGrowth", "ytdGrowth", "mtdBudgetGrowth"].map((key) => percentage(row[key])),
           money(row.mtd), money(row.mtdBudget), percentage(alfredMetrics(branches.filter((branch) => row.name.startsWith("ALFA total") || branch.brand === row.name), "mtd").sameGrowth)]));
@@ -696,6 +881,16 @@
       const gaps = branches.filter((branch) => branch[state.period].bud > 0).sort((a, b) => (a[state.period].cy - a[state.period].bud) - (b[state.period].cy - b[state.period].bud));
       const gapValues = gaps.map((branch) => branch[state.period].cy - branch[state.period].bud);
       brandChart("report-brand-gap-chart", gaps.map((branch) => branch.name), [{ label: "Sales minus budget", data: gapValues, backgroundColor: gapValues.map((value) => value >= 0 ? "#299bb0" : "#ed4654") }], { horizontal: true });
+      const gapChart = chartInstances.get("report-brand-gap-chart");
+      if (gapChart) {
+        gapChart.options.plugins.tooltip.callbacks.label = context => {
+          const branch = gaps[context.dataIndex], amount = branch[state.period];
+          return [`${gapValues[context.dataIndex] >= 0 ? "Ahead" : "Behind"} by ${money(Math.abs(gapValues[context.dataIndex]))}`, `Sales ${money(amount.cy)} of ${money(amount.bud)} (${share(amount.cy, amount.bud)})`, `${share(amount.bud, gaps.reduce((n, branch) => n + branch[state.period].bud, 0))} of scope budget`];
+        };
+        gapChart.options.onClick = (_, elements) => { if (elements.length) inspectStore(gaps[elements[0].index]); };
+        gapChart.canvas.addEventListener("keydown", event => { if (event.key === "Enter" && gapChart.getActiveElements().length) inspectStore(gaps[gapChart.getActiveElements()[0].index]); });
+        gapChart.update("none");
+      }
       table("report-brand-gap-table", ["Store", "Brand", "Sales", "Budget", "Budget gap", "Share of scope budget"], gaps.map((branch, i) => [branch.name, branch.brand, money(branch[state.period].cy), money(branch[state.period].bud), money(gapValues[i]), share(branch[state.period].bud, amount.budget)]));
       const newStores = branches.filter((branch) => branch.new).sort((a, b) => b.opened.localeCompare(a.opened));
       brandChart("report-brand-new-chart", newStores.map((branch) => branch.name), [{ label: "MTD sales", data: newStores.map((branch) => branch.mtd.cy) }]);
@@ -704,6 +899,9 @@
         const average = mature.length ? mature.reduce((total, other) => total + other.mtd.cy, 0) / mature.length / 27 : null;
         return [branch.name, branch.brand, branch.opened, Math.round((new Date(source.asOf) - new Date(branch.opened)) / 2.63e9), money(branch.mtd.cy), money(branch.mtd.cy / 27), average > 0 ? percentage(branch.mtd.cy / 27 / average * 100) : "N/A", share(branch.mtd.cy, branch.mtd.bud)];
       }));
+      const newSales = newStores.reduce((n, branch) => n + branch.mtd.cy, 0);
+      const existing = branches.filter(branch => !branch.new);
+      $("report-brand-new").insertAdjacentHTML("beforeend", `<p class="ceo-chart-note">${newStores.length ? `New stores add ${money(newSales)} MTD, ${share(newSales, amount.mtd)} of scope sales. Without them, the scope is ${percentage(growth(existing.reduce((n, branch) => n + branch.mtd.cy, 0), existing.reduce((n, branch) => n + branch.mtd.py, 0)))} vs LY. Ramp uses all-region source mature peers, not this filtered scope.` : "No new stores in this selection."}</p>`);
       brandChart("report-brand-month-chart", branches.length ? source.months : [], [
         { label: "This year", data: amount.monthly.cy }, { label: "Last year", data: amount.monthly.py },
         { label: "Budget", type: "line", data: amount.monthly.budget },
@@ -731,6 +929,13 @@
         brandChart(`${id}-chart`, source.days, [{ label: "This year", data: row.daily.cy }, { label: "Last year", data: row.daily.py, borderDash: [4, 3] }], { line: true });
         table(`${id}-table`, ["October day", "This year", "Last year"], source.days.map((day, index) => [day, money(row.daily.cy[index]), money(row.daily.py[index])]));
       });
+    }
+    function renderComparisonHeat(id, rows, total = true) {
+      const keys = ["yesterdayVsWeek", "yesterdayVsLy", "wow", "mom", "mtdGrowth", "ytdGrowth", "mtdBudgetGrowth"];
+      const labels = ["Yesterday vs week", "Yesterday vs LY", "WoW", "MoM / day", "MTD vs LY", "YTD vs LY", "MTD vs budget"];
+      $(id).innerHTML = rows.length
+        ? `<div class="report-heat-grid" role="group" aria-label="Comparison heatmap; exact figures also in Table View."><div class="report-heat-row report-heat-header" aria-hidden="true"><strong>${total ? "Brand" : "Store"}</strong>${labels.map(label => `<strong>${label}</strong>`).join("")}</div>${rows.map((row, index) => `<div class="report-heat-row${total && index === rows.length - 1 ? " report-heat-total" : ""}"><strong>${escape(row.name)}</strong>${keys.map((key, i) => `<div class="report-heat-cell ${row[key] === null ? "" : row[key] >= 0 ? "report-heat-up" : "report-heat-down"}" aria-label="${escape(row.name)} · ${labels[i]}: ${percentage(row[key])}"><b>${percentage(row[key])}</b></div>`).join("")}</div>`).join("")}</div>`
+        : '<div class="empty">No source comparisons in scope.</div>';
     }
     function renderBriefExtras() {
       const branches = alfredBranches(), metrics = alfredBriefMetrics(branches, state.period);
@@ -769,9 +974,7 @@
       const comparisonLabels = ["Yesterday vs week", "Yesterday vs LY", "WoW", "MoM / day", "MTD vs LY", "YTD vs LY", "MTD vs budget"];
       const scopeRows = branches.length ? [...brandRows, { name: "ALFA selected scope", ...metrics }] : [];
       $("report-brief-comparisons").innerHTML = '<div class="ceo-graph-view report-comparison-heat" id="report-brief-heat"></div><div id="report-brief-comparison-table"></div>';
-      $("report-brief-heat").innerHTML = scopeRows.length
-        ? `<div class="report-heat-grid" role="group" aria-label="Brand comparison heatmap; exact figures also in Table View."><div class="report-heat-row report-heat-header" aria-hidden="true"><strong>Brand</strong>${comparisonLabels.map((label) => `<strong>${label}</strong>`).join("")}</div>${scopeRows.map((row, index) => `<div class="report-heat-row${index === scopeRows.length - 1 ? " report-heat-total" : ""}"><strong>${escape(row.name)}</strong>${comparisons.map((key, i) => `<div class="report-heat-cell ${row[key] === null ? "" : row[key] >= 0 ? "report-heat-up" : "report-heat-down"}" aria-label="${escape(row.name)} · ${comparisonLabels[i]}: ${percentage(row[key])}"><b>${percentage(row[key])}</b></div>`).join("")}</div>`).join("")}</div>`
-        : '<div class="empty">No source comparisons in scope.</div>';
+      renderComparisonHeat("report-brief-heat", scopeRows);
       table("report-brief-comparison-table", ["Brand", ...comparisonLabels], scopeRows.map((row) => [row.name, ...comparisons.map((key) => percentage(row[key]))]));
       const alerts = [];
       if (metrics.attainment !== null && metrics.attainment < 90) alerts.push(["Behind budget", `${percentage(metrics.attainment)} attained; gap ${money(metrics.cy - metrics.budget)}.`]);
@@ -824,15 +1027,46 @@
       const draws = [];
       for (const kind of ["stores", "cities"]) {
         const id = kind === "stores" ? "report-brand-store-map" : "report-brand-city-map";
-        const mapState = brandMapState[kind], entries = kind === "stores" ? points : cities;
+        const mapState = brandMapState[kind], entries = root.AlfaSalesMap.pointsInView(kind === "stores" ? points : cities, mapState.view);
         $(id).innerHTML = `<div class="ceo-graph-view"><div class="report-map-controls"><div class="segment" role="group" aria-label="${kind} map metric">${[["revenue", "Revenue"], ["checks", "Checks"], ["guests", "Guests"], ["budget", "Budget attainment"]].map(([value, label]) => `<button type="button" data-brand-map-metric="${value}" aria-pressed="${value === mapState.metric}">${label}</button>`).join("")}</div>${kind === "stores" ? `<div class="segment" role="group" aria-label="Brand map area">${[["ksa", "Saudi"], ["riyadh", "Riyadh"], ["jeddah", "Jeddah"], ["eastern", "Eastern"]].map(([value, label]) => `<button type="button" data-brand-map-view="${value}" aria-pressed="${value === mapState.view}">${label}</button>`).join("")}</div>` : ""}</div><p class="ceo-chart-note">Alfred mall/district coordinates. Guests/checks are source estimates; YTD uses MTD counts. City coordinates are the average of their branch positions.</p><div class="report-sales-map" id="${id}-canvas"></div><div class="report-map-legend" id="${id}-legend"></div><label class="field">Inspect ${kind === "stores" ? "branch" : "city"}<select id="${id}-inspect"><option value="">Select ${kind === "stores" ? "a branch" : "a city"}</option>${entries.map((point, index) => `<option value="${index}">${escape(point.name)}</option>`).join("")}</select></label><p id="${id}-detail" role="status">${entries.length} ${kind} in scope.</p></div><div id="${id}-table"></div>`;
         table(`${id}-table`, [kind === "stores" ? "Store" : "City", "Stores", "Sales", "Last year", "Budget attainment", `Estimated ${guestPeriod.toUpperCase()} guests`, `Estimated ${guestPeriod.toUpperCase()} checks`],
           entries.map((point) => [point.name, point.n, money(point.cy), money(point.py), share(point.cy, point.bud), point.g, point.chk]));
         const describe = (point) => `${escape(point.name)} · ${point.n} ${point.n === 1 ? "store" : "stores"}<br>Sales ${money(point.cy)} · ${percentage(growth(point.cy, point.py))} vs LY<br>Budget ${share(point.cy, point.bud)} · estimated ${guestPeriod.toUpperCase()} guests ${point.g.toLocaleString("en-GB")} · checks ${point.chk.toLocaleString("en-GB")}`;
+        $(`${id}-canvas`).insertAdjacentHTML("beforebegin", `<p class="ceo-chart-note" role="status">${escape(mapProvider === "offline" ? "Offline source map selected." : googleMapError || (googleMaps ? "Google heatmap · heat intensity is relative to this scope. Small pins open exact details." : "Google Maps is loading or requires maps-config.js setup. Use the Sales map provider control to select offline maps."))} ${root.AlfaMapsConfig?.mapId ? "Configured cloud map style." : "Monochrome cloud style pending: set mapId in maps-config.js after publishing the style."}</p>`);
         const draw = () => {
           const host = $(`${id}-canvas`);
           if (!host.checkVisibility()) return;
           if (!entries.length) { host.innerHTML = '<div class="empty">No Alfred records match the selected filters.</div>'; $(`${id}-legend`).textContent = ""; return; }
+          if (mapProvider === "google") {
+            if (!googleMaps) {
+              const configuredKey = typeof root.AlfaMapsConfig?.apiKey === "string" && root.AlfaMapsConfig.apiKey.trim();
+              host.innerHTML = `<div class="empty" role="${googleMapError || !configuredKey ? "alert" : "status"}">${escape(googleMapError || (configuredKey ? "Loading Google Maps…" : "Google Maps configuration unavailable. Set apiKey in maps-config.js beside index.html, then reload."))}</div>`;
+              $(`${id}-legend`).textContent = "";
+              return;
+            }
+            let controller = googleBrandMaps.get(kind);
+            if (!controller) {
+              const element = document.createElement("div");
+              element.className = "report-google-map";
+              host.replaceChildren(element);
+              controller = root.AlfaSalesMap.createGoogleMap(element, googleMaps);
+              googleBrandMaps.set(kind, controller);
+            }
+            if (controller.element.parentElement !== host) host.replaceChildren(controller.element);
+            if (!host.dataset.googleRendered) {
+              controller.update(entries, {
+                view: mapState.view, metric: mapState.metric, describe,
+                onInspect: (point) => {
+                  $(`${id}-inspect`).value = String(entries.indexOf(point));
+                  $(`${id}-detail`).innerHTML = describe(point);
+                },
+              });
+              host.dataset.googleRendered = "true";
+            }
+            controller.resize();
+            root.AlfaSalesMap.legend(`${id}-legend`, mapState.metric === "budget" ? "budget" : "heat");
+            return;
+          }
           const additive = mapState.metric !== "budget";
           root.AlfaSalesMap.drawMap(host.id, entries.map((point) => ({ ...point, v: Math.max(0, mapState.metric === "guests" ? point.g : mapState.metric === "checks" ? point.chk : point.cy) })), {
             view: mapState.view, additive, dot: kind === "cities" || !additive, city: kind === "cities", tip: describe,
@@ -852,6 +1086,7 @@
         });
         $(`${id}-inspect`).onchange = (event) => {
           $(`${id}-detail`).innerHTML = event.target.value === "" ? `${entries.length} ${kind} in scope.` : describe(entries[Number(event.target.value)]);
+          if (event.target.value !== "" && mapProvider === "google" && googleMaps) googleBrandMaps.get(kind)?.inspect(entries[Number(event.target.value)]);
         };
         brandMapObserver.observe($(`${id}-canvas`));
       }
@@ -928,7 +1163,7 @@
       const period = state.period === "ytd" ? "mtd" : state.period;
       const eligible = rs.map((branch) => ({ branch, ...alfredStoreMetrics(branch, period) })).filter((row) => row.trafficEligible);
       const visible = eligible.filter((row) => Math.abs(row.guestGrowth) < 90 && Math.abs(row.spendGrowth) < 90);
-      $("report-store-traffic").innerHTML = `<div class="ceo-graph-view"><p class="ceo-chart-note">${escape(period.toUpperCase())} source traffic: right = more guests; up = higher spend/guest. ${eligible.length - visible.length} eligible outliers at ±90% or beyond are excluded from the graph, matching Alfred; all eligible stores remain in Table View.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll source store traffic chart"><div style="position:relative;height:360px;min-width:420px"><canvas id="report-store-traffic-chart" tabindex="0" role="img" aria-label="Source guest growth versus spend per guest growth"></canvas></div></div><p id="report-store-traffic-chart-detail" role="status">Hover a bubble or use arrow keys to inspect source figures.</p></div><div id="report-store-traffic-chart-table"></div>`;
+      $("report-store-traffic").innerHTML = `<div class="ceo-graph-view"><p class="ceo-chart-note">${escape(period.toUpperCase())} source traffic: right = more guests; up = higher spend/guest. ${eligible.length - visible.length} eligible outliers at ±90% or beyond are excluded from the graph, matching Alfred; all eligible stores remain in Table View.</p><div style="overflow:auto;max-width:100%" tabindex="0" role="region" aria-label="Scroll source store traffic chart"><div style="position:relative;height:360px;min-width:420px"><canvas id="report-store-traffic-chart" tabindex="0" role="img" aria-label="Source guest growth versus spend per guest growth"></canvas></div></div><p id="report-store-traffic-chart-detail" role="status">Hover a bubble or use arrow keys to inspect source figures. Click a bubble or press Enter to open its store detail.</p></div><div id="report-store-traffic-chart-table"></div>`;
       table("report-store-traffic-chart-table", ["Store", "Brand", "Guest growth", "Spend / guest growth", "Sales", "Growth vs LY"], eligible.map((row) => [row.branch.name, row.branch.brand, percentage(row.guestGrowth), percentage(row.spendGrowth), money(row.cy), percentage(row.growth)]));
       if (!visible.length) {
         $("report-store-traffic-chart").parentElement.innerHTML = '<div class="empty">No source stores qualify for the traffic graph.</div>';
@@ -945,6 +1180,12 @@
         return `${row.branch.name} (${row.branch.brand}) · Guests ${percentage(row.guestGrowth)} · Spend ${percentage(row.spendGrowth)} · Sales ${money(row.cy)} (${percentage(row.growth)} vs LY)`;
       };
       const canvas = $("report-store-traffic-chart");
+      const inspectTraffic = (index) => {
+        selectedStore = visible[index].branch.name;
+        $("report-source-store-picker").value = selectedStore;
+        renderSourceStoreDetail(rs); compactNotices();
+        $("report-source-store-detail").closest("article").scrollIntoView({ block: "start" });
+      };
       const chart = new Chart(canvas, {
         type: "bubble",
         data: { datasets: [{ data: points, backgroundColor: visible.map((row) => chartFill(colors[sourceBrands.indexOf(row.branch.brand)])), borderColor: visible.map((row) => colors[sourceBrands.indexOf(row.branch.brand)]), borderWidth: 1 }] },
@@ -955,6 +1196,7 @@
             y: { title: { display: true, text: "Spend per guest vs LY" }, suggestedMin: -5, suggestedMax: 5, ticks: { callback: (value) => `${value}%` } },
           },
           plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => describe(context.dataIndex) } } },
+          onClick: (_, elements) => { if (elements.length) inspectTraffic(elements[0].index); },
         },
         plugins: [{ id: "source-traffic-quadrants", beforeDatasetsDraw: (chart) => {
           const { ctx, scales: { x, y } } = chart;
@@ -969,8 +1211,10 @@
         } }],
       });
       chartInstances.set("report-store-traffic-chart", chart);
+      enableChartZoom(chart);
       let activeIndex = -1;
       canvas.onkeydown = (event) => {
+        if (event.key === "Enter" && activeIndex >= 0) { event.preventDefault(); inspectTraffic(activeIndex); return; }
         if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
         event.preventDefault();
         activeIndex = (activeIndex + (event.key === "ArrowRight" ? 1 : -1) + points.length) % points.length;
@@ -1097,20 +1341,80 @@
       mapObserver.disconnect();
       const branches = alfredBranches();
       const guestPeriod = state.period === "dtd" ? "dtd" : "mtd";
-      const points = branches.map((branch) => ({
+      const points = root.AlfaSalesMap.pointsInView(branches.map((branch) => ({
         name: branch.name, brand: branch.brand, lat: branch.lat, lng: branch.lng,
         cy: branch[state.period].cy, py: branch[state.period].py, bud: branch[state.period].bud,
         g: branch.guests[guestPeriod][0], chk: branch.checks[guestPeriod][0],
-      }));
+      })), mapView);
       $("report-map").innerHTML = `${alfredNotice()}<div class="ceo-graph-view"><div class="report-map-controls"><div class="segment" role="group" aria-label="Sales map metric">${[["revenue", "Revenue"], ["growth", "Growth vs LY"], ["budget", "Budget attainment"], ["guests", "Guests"]].map(([value, label]) => `<button type="button" data-map-metric="${value}" aria-pressed="${mapMetric === value}">${label}</button>`).join("")}</div><div class="segment" role="group" aria-label="Sales map area">${[["ksa", "Saudi"], ["riyadh", "Riyadh"], ["jeddah", "Jeddah"], ["eastern", "Eastern"]].map(([value, label]) => `<button type="button" data-map-view="${value}" aria-pressed="${mapView === value}">${label}</button>`).join("")}</div></div><p class="ceo-chart-note">Heat = concentration of sales or guests. Dot color = growth or budget attainment. Guest/check counts are estimates in the Alfred source; YTD uses its MTD guest/check counts, not YTD counts.</p><div class="report-sales-map" id="report-sales-map-canvas"></div><div class="report-map-legend" id="report-sales-map-legend"></div><label class="field">Inspect branch<select id="report-map-branch"><option value="">Select a branch</option>${points.map((point, index) => `<option value="${index}">${escape(point.name)}</option>`).join("")}</select></label><p id="report-map-detail" role="status">${points.length} source branches in scope.</p></div><div id="report-sales-map-table"></div>`;
       table("report-sales-map-table", ["Branch", "Brand", "Region", "Sales", "Last year", "Budget", "Growth vs LY", "Budget attainment"],
         branches.map((branch) => [branch.name, branch.brand, branch.region, money(branch[state.period].cy), money(branch[state.period].py), money(branch[state.period].bud),
           percentage(growth(branch[state.period].cy, branch[state.period].py)), share(branch[state.period].cy, branch[state.period].bud)]));
+      $("report-map").querySelector(".report-map-controls").nextElementSibling.textContent = mapProvider === "google"
+        ? "Interactive heatmap: warmer areas show higher sales or estimated guest concentration. Small pins open branch details. Growth/budget views show performance-colored pins, not additive heat."
+        : "Offline source map: heat shows concentration of sales or guests; dot color shows growth or budget attainment.";
+      const configuredKey = typeof root.AlfaMapsConfig?.apiKey === "string" ? root.AlfaMapsConfig.apiKey.trim() : "";
+      if (!root.AlfaMapsConfig?.mapId) $("report-map").querySelector(".report-map-controls").nextElementSibling.textContent += " Monochrome cloud style pending: configure a styled mapId in maps-config.js.";
+      const setupMessage = "Set apiKey in the untracked maps-config.js file beside index.html, then reload. Google Maps connects automatically.";
+      $("report-sales-map-canvas").insertAdjacentHTML("beforebegin", `<div class="report-google-settings"><p class="ceo-chart-note">Google Maps · pan, zoom and select a branch. Heat intensity is relative to the selected scope, not comparable across different filters. Google receives standard Maps requests, not sales, guest or budget figures. Guest/check estimates use ${guestPeriod.toUpperCase()}.</p><button type="button" class="report-store-inspect" id="report-map-provider">${mapProvider === "google" ? "Use offline source map" : "Use Google Maps"}</button><p id="report-google-status" role="${googleMapError || (!configuredKey && mapProvider === "google") ? "alert" : "status"}">${escape(googleMapError || (mapProvider === "offline" ? "Offline source map selected; no Google basemap." : googleMaps ? "Google Maps connected." : googleMapLoading || configuredKey ? "Loading Google Maps…" : setupMessage))}</p></div>`);
+      $("report-map-provider").onclick = () => {
+        mapProvider = mapProvider === "google" ? "offline" : "google";
+        renderSalesMap(); renderAlfredBrands(); compactNotices();
+      };
+      const connectGoogleMap = async () => {
+        googleMapAttempted = true;
+        googleMapLoading = true; googleMapError = "";
+        renderSalesMap(); compactNotices();
+        const fail = (error) => {
+          console.error("Google Sales map:", error.message);
+          googleMapError = error.message; googleMaps = null;
+          googleMap?.destroy(); googleMap = null;
+          googleBrandMaps.forEach((controller) => controller.destroy());
+          googleBrandMaps.clear();
+          renderSalesMap(); renderAlfredBrands(); compactNotices();
+        };
+        try {
+          googleMaps = await root.AlfaSalesMap.loadGoogleMaps(configuredKey, fail);
+          googleMapLoading = false;
+          renderSalesMap(); renderAlfredBrands(); compactNotices();
+        } catch (error) {
+          googleMapLoading = false;
+          fail(error);
+        }
+      };
       const describe = (point) => `${escape(point.name)} · ${escape(point.brand)}<br>Sales ${money(point.cy)} · ${percentage(growth(point.cy, point.py))} vs LY<br>Budget ${share(point.cy, point.bud)} · estimated ${guestPeriod.toUpperCase()} guests ${point.g.toLocaleString("en-GB")} · checks ${point.chk.toLocaleString("en-GB")}`;
       drawSalesMap = () => {
         const host = $("report-sales-map-canvas");
         if (!host.checkVisibility()) return;
         if (!points.length) { host.innerHTML = '<div class="empty">No Alfred branches match the selected filters.</div>'; $("report-sales-map-legend").textContent = ""; return; }
+        if (mapProvider === "google") {
+          if (!googleMaps) {
+            host.innerHTML = `<div class="empty">${escape(googleMapError || (configuredKey ? "Loading Google Maps…" : setupMessage))} You can also select the offline source map.</div>`;
+            $("report-sales-map-legend").textContent = "";
+            return;
+          }
+          if (!googleMap) {
+            const element = document.createElement("div");
+            element.className = "report-google-map";
+            host.replaceChildren(element);
+            googleMap = root.AlfaSalesMap.createGoogleMap(element, googleMaps);
+          }
+          if (googleMap.element.parentElement !== host) host.replaceChildren(googleMap.element);
+          if (!host.dataset.googleRendered) {
+            googleMap.update(points, {
+              view: mapView, metric: mapMetric, describe,
+              onInspect: (point) => {
+                $("report-map-branch").value = String(points.indexOf(point));
+                $("report-map-detail").innerHTML = describe(point);
+              },
+            });
+            host.dataset.googleRendered = "true";
+          }
+          googleMap.resize();
+          if (mapMetric === "growth" || mapMetric === "budget") root.AlfaSalesMap.legend("report-sales-map-legend", mapMetric);
+          else root.AlfaSalesMap.legend("report-sales-map-legend", "heat");
+          return;
+        }
         const additive = mapMetric === "revenue" || mapMetric === "guests";
         root.AlfaSalesMap.drawMap(host.id, points.map((point) => ({ ...point, v: Math.max(0, mapMetric === "guests" ? point.g : point.cy) })), {
           view: mapView, additive, dot: !additive, tip: describe,
@@ -1132,9 +1436,11 @@
       $("report-map-branch").onchange = (event) => {
         if (event.target.value === "") { $("report-map-detail").textContent = `${points.length} source branches in scope.`; return; }
         $("report-map-detail").innerHTML = describe(points[Number(event.target.value)]);
+        if (mapProvider === "google" && googleMaps) googleMap?.inspect(points[Number(event.target.value)]);
       };
       mapObserver.observe($("report-sales-map-canvas"));
       drawSalesMap();
+      if (mapProvider === "google" && configuredKey && !googleMapAttempted) void connectGoogleMap();
     }
     function renderMenu() {
       const source = root.AlfaOctoberDaily.menu;
@@ -1222,6 +1528,7 @@
           } }],
         });
         chartInstances.set("report-menu-engineering-chart", chart);
+        enableChartZoom(chart);
         chart.canvas.onkeydown = (event) => {
           if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
           event.preventDefault();
