@@ -1420,8 +1420,11 @@
       brandChart("report-alfred-delivery-vendors-chart", source.months, series, { stacked: true });
       table("report-alfred-delivery-vendors-table", ["Month", ...metrics.vendors.map((vendor) => vendor.name), "Total delivery"], source.months.map((month, i) =>
         [month, ...metrics.vendors.map((vendor) => money(vendor.sales[i])), money(metrics.totals[i])]));
-      brandChart("report-alfred-delivery-share-chart", source.months, [{ label: "Delivery share", data: metrics.shares }], { line: true, percent: true });
-      table("report-alfred-delivery-share-table", ["Month", "Delivery sales", "Total net sales", "Delivery share"], source.months.map((month, i) =>
+      brandChart("report-alfred-delivery-share-chart", source.months, [{
+        label: "Delivery share", data: metrics.shares, pointRadius: 3,
+        pointBackgroundColor: chartColors.current,
+      }], { line: true, percent: true });
+      table("report-alfred-delivery-share-table", ["Interval", "Delivery sales", "Total net sales", "Delivery share"], source.months.map((month, i) =>
         [month, money(metrics.totals[i]), money(source.netSales[i]), percentage(metrics.shares[i])]));
       const vendors = metrics.vendors.toSorted((a, b) => commission(b) - commission(a));
       const paid = vendors.filter((vendor) => commission(vendor) > 0);
